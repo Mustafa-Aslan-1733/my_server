@@ -6,7 +6,6 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
-#include "http_parser.h"
 
 // configure the server to listen on any address on port socketnum, bind the 
 // server socket to the address (assigning a name to the socket) then starts
@@ -19,7 +18,7 @@ int setup_server(int *_serv_socket, struct sockaddr_in6 *server, int socketnum){
     }
 
     server->sin6_family = AF_INET6;
-    server->sin6_addr.s_addr = in6addr_any;
+    server->sin6_addr.s6_addr = in6addr_any;
     server->sin6_port = htons(socketnum);
 
     if (bind(serv_socket, (struct sockaddr*) server, sizeof(*server)) < 0){
