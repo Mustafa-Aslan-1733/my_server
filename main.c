@@ -18,7 +18,7 @@ int setup_server(int *_serv_socket, struct sockaddr_in6 *server, int socketnum){
     }
 
     server->sin6_family = AF_INET6;
-    server->sin6_addr.s6_addr = in6addr_any;
+    server->sin6_addr = in6addr_any;
     server->sin6_port = htons(socketnum);
 
     if (bind(serv_socket, (struct sockaddr*) server, sizeof(*server)) < 0){
@@ -34,7 +34,7 @@ int setup_server(int *_serv_socket, struct sockaddr_in6 *server, int socketnum){
 
 //wait for a connection, then return with the client address info in *client
 //and the file descriptor to the accepted socket in _cl_socket.
-int accept_connection(int serv_socket, int *_cl_socket, struct sockaddr_in *client){
+int accept_connection(int serv_socket, int *_cl_socket, struct sockaddr_in6 *client){
     puts("Waiting for incoming connections");
     int c, cl_socket;
     c = sizeof(struct sockaddr_in);
@@ -99,11 +99,5 @@ int main(int argc, char** argv){
     close(cl_socket);
     close(fd);
     close(serv_socket);
-
-    //puts(message);
-    struct HttpRequest request = parseRequest(message, msize);
-    
-    printf("Method: %d, url:%s, version: %d.%d\n", request.method, request.url,
-            request.version, request.subversion);
     return 0;
 } 
