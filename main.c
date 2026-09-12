@@ -37,7 +37,7 @@ int setup_server(int *_serv_socket, struct sockaddr_in6 *server, int socketnum){
 int accept_connection(int serv_socket, int *_cl_socket, struct sockaddr_in6 *client){
     puts("Waiting for incoming connections");
     int c, cl_socket;
-    c = sizeof(struct sockaddr_in);
+    c = sizeof(struct sockaddr_in6);
     cl_socket = accept(serv_socket, (struct sockaddr*) client, (socklen_t *)&c);
     
     if (cl_socket < 0){
@@ -56,7 +56,13 @@ int main(int argc, char** argv){
 
     int socketnum = 8000;
 
-    if (argc == 2){
+    if (argc == 1) {
+            if (setup_server(&serv_socket, &server, 80) == -1){
+                puts("bind failed");
+                puts(strerror(errno));
+            }
+    }
+    else if (argc == 2){
         if (!strcmp(argv[1], "80")){
             if (setup_server(&serv_socket, &server, 80) == -1){
                 puts("bind failed");
