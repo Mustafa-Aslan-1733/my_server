@@ -12,7 +12,7 @@
 // listening on the server socket.
 int setup_server(int *_serv_socket, struct sockaddr_in6 *server, int socketnum){
     int serv_socket;
-    serv_socket = socket(AF_INET, SOCK_STREAM, 0);
+    serv_socket = socket(AF_INET6, SOCK_STREAM, 0);
     if (serv_socket == -1){
         puts("could not create socket");
     }
