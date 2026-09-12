@@ -91,8 +91,7 @@ int main(int argc, char** argv){
     msize = read(cl_socket, message, 2000);
     message[msize] = '\0';
 
-    char *fpath = "/home/mustafa/Desktop/Programming/"
-        "cProjects/http_server/res/index.html";
+    char *fpath = "./res/index.html";
     int fd = open(fpath, O_RDONLY);
     if (fd == -1){
         puts("cant open file");
