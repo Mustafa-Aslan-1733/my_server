@@ -76,6 +76,7 @@ int main(int argc, char** argv){
         int msize = 0;
         msize = read(cl_socket, message, 2000);
         message[msize] = '\0';
+        puts(message);
 
         char *fpath = "./res/index.html";
         int fd = open(fpath, O_RDONLY);
