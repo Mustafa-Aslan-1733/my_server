@@ -66,7 +66,9 @@ int main(int argc, char** argv){
         return 0;
     }
 
-    int t = 3;
+    // This is only for debugging so that it doesn't infinitely loop when 
+    // something goes wrong
+    int t = 100;
     while (t--) {
         accept_connection(serv_socket, &cl_socket, &client);
 
