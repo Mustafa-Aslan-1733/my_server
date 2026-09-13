@@ -61,48 +61,32 @@ int main(int argc, char** argv){
                 puts("bind failed");
                 puts(strerror(errno));
             }
-    }
-    else if (argc == 2){
-        if (!strcmp(argv[1], "80")){
-            if (setup_server(&serv_socket, &server, 80) == -1){
-                puts("bind failed");
-                puts(strerror(errno));
-            }
-        }
-    }else{
-        int res;
-        while(socketnum < 8999){
-            if ((res = setup_server(&serv_socket, &server, socketnum++)) == -1)
-                continue;
-            break;
-        }
-        if(res == -1){
-            puts("bind failed");
-            puts(strerror(errno));
-        }else{
-            printf("socknum: %d\r\n", --socketnum);
-        }
-    }
-
-    accept_connection(serv_socket, &cl_socket, &client);
-
-    char response[2000], message[2000];
-    int msize = 0;
-    msize = read(cl_socket, message, 2000);
-    message[msize] = '\0';
-
-    char *fpath = "./res/index.html";
-    int fd = open(fpath, O_RDONLY);
-    if (fd == -1){
-        puts("cant open file");
+    } else {
+        puts("don't give any arguments (at least for now)");
         return 0;
     }
-    int rsize = read(fd, response, 2000);
-    response[rsize] = '\0';
 
-    write(cl_socket, response, rsize);
-    close(cl_socket);
-    close(fd);
-    close(serv_socket);
+    while (1) {
+        accept_connection(serv_socket, &cl_socket, &client);
+
+        char response[2000], message[2000];
+        int msize = 0;
+        msize = read(cl_socket, message, 2000);
+        message[msize] = '\0';
+
+        char *fpath = "./res/index.html";
+        int fd = open(fpath, O_RDONLY);
+        if (fd == -1){
+            puts("cant open file");
+            return 0;
+        }
+        int rsize = read(fd, response, 2000);
+        response[rsize] = '\0';
+
+        write(cl_socket, response, rsize);
+        close(cl_socket);
+        close(fd);
+        close(serv_socket);
+    }
     return 0;
 } 
