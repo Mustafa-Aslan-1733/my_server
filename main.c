@@ -87,7 +87,7 @@ int main(int argc, char** argv){
         write(cl_socket, response, rsize);
         close(cl_socket);
         close(fd);
-        close(serv_socket);
     }
+    close(serv_socket);
     return 0;
 } 
