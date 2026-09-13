@@ -66,7 +66,8 @@ int main(int argc, char** argv){
         return 0;
     }
 
-    while (1) {
+    int t = 3;
+    while (t--) {
         accept_connection(serv_socket, &cl_socket, &client);
 
         char response[2000], message[2000];
