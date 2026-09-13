@@ -57,7 +57,7 @@ int main(int argc, char** argv){
     int socketnum = 8000;
 
     if (argc == 1) {
-            if (setup_server(&serv_socket, &server, 80) == -1){
+            if (setup_server(&serv_socket, &server, 443) == -1){
                 puts("bind failed");
                 puts(strerror(errno));
             }
