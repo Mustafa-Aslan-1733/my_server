@@ -1,0 +1,8 @@
+[Unit]
+Description=Remove Docker images no container is using
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/docker-image-gc.sh

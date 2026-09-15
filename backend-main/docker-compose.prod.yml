@@ -1,0 +1,49 @@
+services:
+  backend:
+    image: "${BACKEND_IMAGE:?BACKEND_IMAGE is required}"
+    container_name: app-server
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SERVER_PORT: "${SERVER_PORT:-8080}"
+      SPRING_DATASOURCE_URL: "${SPRING_DATASOURCE_URL:-jdbc:postgresql://host.docker.internal:5432/postgres}"
+      SPRING_DATASOURCE_USERNAME: "${SPRING_DATASOURCE_USERNAME:-postgres}"
+      SPRING_DATASOURCE_PASSWORD: "${SPRING_DATASOURCE_PASSWORD:?SPRING_DATASOURCE_PASSWORD is required}"
+      SPRING_FLYWAY_ENABLED: "${SPRING_FLYWAY_ENABLED:-true}"
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "${SPRING_FLYWAY_BASELINE_ON_MIGRATE:-false}"
+      ADMIN_FRONTEND_ORIGINS: "${ADMIN_FRONTEND_ORIGINS:-https://ratemyprofessor.dev}"
+      ADMIN_BOOTSTRAP_EMAILS: "${ADMIN_BOOTSTRAP_EMAILS:-unzhz@student.kit.edu:Alparslan,ugoqu@student.kit.edu:Mustafa,ugjlu@student.kit.edu:Luis,uzvqy@student.kit.edu:Yavuz,uiolj@student.kit.edu:Philipp,uchbm@student.kit.edu:Enno}"
+      ADMIN_SUPERUSER_EMAILS: "${ADMIN_SUPERUSER_EMAILS:-unzhz@student.kit.edu}"
+      AUTH_RATE_LIMIT_HMAC_KEY: "${AUTH_RATE_LIMIT_HMAC_KEY:?AUTH_RATE_LIMIT_HMAC_KEY is required}"
+      AUTH_OTP_TTL: "${AUTH_OTP_TTL:-PT5M}"
+      AUTH_ADMIN_SESSION_TTL: "${AUTH_ADMIN_SESSION_TTL:-P1D}"
+      AUTH_APP_SESSION_TTL: "${AUTH_APP_SESSION_TTL:-P365D}"
+      AUTH_RATE_LIMIT_WINDOW: "${AUTH_RATE_LIMIT_WINDOW:-PT15M}"
+      AUTH_RATE_LIMIT_REQUEST_EMAIL: "${AUTH_RATE_LIMIT_REQUEST_EMAIL:-3}"
+      AUTH_RATE_LIMIT_REQUEST_IP: "${AUTH_RATE_LIMIT_REQUEST_IP:-20}"
+      AUTH_RATE_LIMIT_LOGIN_EMAIL: "${AUTH_RATE_LIMIT_LOGIN_EMAIL:-10}"
+      AUTH_RATE_LIMIT_LOGIN_IP: "${AUTH_RATE_LIMIT_LOGIN_IP:-30}"
+      SPRING_MAIL_HOST: "${SPRING_MAIL_HOST:-}"
+      SPRING_MAIL_PORT: "${SPRING_MAIL_PORT:-587}"
+      SPRING_MAIL_USERNAME: "${SPRING_MAIL_USERNAME:-}"
+      SPRING_MAIL_PASSWORD: "${SPRING_MAIL_PASSWORD:-}"
+      SPRING_MAIL_SMTP_AUTH: "${SPRING_MAIL_SMTP_AUTH:-true}"
+      SPRING_MAIL_STARTTLS: "${SPRING_MAIL_STARTTLS:-true}"
+      MAIL_FROM_ADDRESS: "${MAIL_FROM_ADDRESS:-}"
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-RateMyProfApp}"
+      IPINFO_TOKEN: "${IPINFO_TOKEN:-}"
+      GEOAPIFY_API_KEY: "${GEOAPIFY_API_KEY:-}"
+      AUDIT_REVERT_WINDOW: "${AUDIT_REVERT_WINDOW:-P7D}"
+      GITLAB_BASE_URL: "${GITLAB_BASE_URL:-}"
+      GITLAB_PROJECT_ID: "${GITLAB_PROJECT_ID:-}"
+      GITLAB_TOKEN: "${GITLAB_TOKEN:-}"
+      GITLAB_TIMEOUT: "${GITLAB_TIMEOUT:-PT10S}"
+    ports:
+      - "${BACKEND_PUBLISHED_PORT:-127.0.0.1:8080}:${SERVER_PORT:-8080}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${SERVER_PORT:-8080}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5

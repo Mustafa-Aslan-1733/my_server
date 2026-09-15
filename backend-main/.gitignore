@@ -1,0 +1,50 @@
+HELP.md
+target/
+*.class
+.m2/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Node / local env ###
+node_modules/
+.env
+.deploy.env
+
+### CI job scratch (server:postgres-integration writes it, then greps it)
+postgres-integration.log
+postgres-e2e.log
+
+### Local working notes (not repo history)
+CLAUDE.md
+STATUS.md
+docs/presentation.md
+docs/coursework/abgabe-inventory.md

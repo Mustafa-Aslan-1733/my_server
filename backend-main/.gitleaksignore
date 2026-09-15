@@ -1,0 +1,82 @@
+# Findings that have been dealt with. One line retires exactly one finding of
+# secrets:history, the scheduled full-history scan.
+#
+# This is not a baseline. --baseline-path silences every current finding at once, including
+# credentials that are still live on their provider, which is the opposite of what that job
+# is for. A line here is the other thing: a record that one specific value is now worthless.
+#
+# Uncomment a line only once the credential behind it has been ROTATED AT ITS PROVIDER, and
+# put the date on it. Editing a secret out of a file does not unpublish it -- every value
+# below is still in the history and in every clone that has ever been made, so nothing except
+# the provider can retire it. This file is what gives the job an end: it is red today, one
+# line less red per rotation, and green when the last one is done.
+#
+# The rotation list lives in docs/TODO.md and is longer than this file. Three of the
+# credentials in commit 245174c are invisible to gitleaks' rule set -- the reasons are written
+# down next to the list -- so five quiet fingerprints here would mean the scanner has nothing
+# left to say, not that the list is finished.
+#
+# Every fingerprint below names the rotation row it retires -- R1..R7 in the table under
+# "My next steps" in docs/TODO.md. Twelve fingerprints for seven credentials, because a
+# fingerprint is per RULE and per COMMIT: one value can need several lines, and silencing one
+# rule leaves the others. Uncomment every line of a row together, or the job stays red for a
+# credential that has in fact been rotated.
+
+# --- 245174c, src/main/resources/application.properties -----------------------------------
+# [R4] ipinfo.io account password (line 24). Change it at ipinfo.io. It is an account
+# password, not an API token, so the account itself is what has to change -- rotating
+# IPINFO_TOKEN leaves it valid.
+#245174c45af709dd4007199fdec2a3e7aa750797:src/main/resources/application.properties:generic-api-key:24
+
+# [R5] Geoapify API key (line 28). Revoke it in the Geoapify dashboard, issue a new one, and
+# put that one in the GEOAPIFY_API_KEY CI/CD variable -- the deploy job is where it reaches
+# the server, so a rotation that stops at the dashboard takes the API down with it.
+#245174c45af709dd4007199fdec2a3e7aa750797:src/main/resources/application.properties:generic-api-key:28
+
+# --- [R1] testclient/TestClient.java, one bearer token in three commits --------------------
+# The same value each time, so all three retire together or not at all. It is a session token
+# the server issued: invalidating that session on the server is the rotation. TestClient reads
+# TEST_CLIENT_TOKEN from the environment since e120103 and no longer carries one.
+#bf4a4764f0e19c01d73c35117f31f074fb58718c:testclient/TestClient.java:generic-api-key:24
+#c592ae5eac7a588e43540787c6f9ce07f485a8e6:testclient/TestClient.java:generic-api-key:24
+#8bc81ef83a4eb7e1d2d91fcbc3fdacf972fcd919:testclient/TestClient.java:generic-api-key:24
+
+# --- Found by .gitleaks.toml, which did not exist when the list above was written -----------
+#
+# These are the same kind of credential, in commits the rotation list in docs/TODO.md does not
+# name. The default rules never reported them: two are passwords whose punctuation the
+# generic-api-key value pattern cannot span, and one is in a MARKDOWN file, which nobody had
+# thought to read. That is the "floor, not a ceiling" line in docs/TODO.md turned around --
+# the reading found three the scanner missed, and the scanner has now found three the reading
+# missed.
+#
+# Same rule as above: uncomment one only after the credential behind it is rotated AT ITS
+# PROVIDER, with the date.
+
+# [R6] spring.datasource.password, in a DOCUMENT rather than a properties file.
+# BackEndStructure.md was a design note; the password went into it as an illustration of the
+# config. Rotate the database password. R6 and R7 are the SAME credential -- uncomment both
+# or neither.
+#214ff090f1c0aaf8026a40da312e5f74bda0b3db:BackEndStructure.md:pse-known-credential-property:153
+
+# [R2] spring.mail.password, an earlier commit than the 245174c the list records. Same SMTP
+# account, so it retires with the R2 line above -- but it means the value was public for
+# longer than the list said.
+#8bc81ef83a4eb7e1d2d91fcbc3fdacf972fcd919:src/main/resources/application.properties:pse-known-credential-property:6
+
+# [R7] spring.datasource.password again, bare rather than in a ${...} placeholder.
+# docs/TODO.md records the placeholder-with-a-default case and calls it "not certainly live";
+# this is the other one, and it is a plain assignment. Same credential as R6.
+#d4cdbde03517937b1ce2584a0a003e966d7a2cb7:src/main/resources/application.properties:pse-known-credential-property:8
+
+# [R3, R4, R5] The four in 245174c that the new rules see and generic-api-key did not. These
+# are the same credentials the list above already names -- the ipinfo token (R3), the Geoapify
+# key (R5), and the two account passwords in comments (R4, R5) -- so they retire WITH their
+# existing lines, not separately. They are here because a fingerprint is per rule: silencing
+# generic-api-key leaves these.
+#   line 23 -> R3 (ipinfo.token)      line 24 -> R4 (ipinfo.io account password)
+#   line 26 -> R5 (Geoapify account)  line 28 -> R5 (Geoapify API key)
+#245174c45af709dd4007199fdec2a3e7aa750797:src/main/resources/application.properties:pse-known-credential-property:23
+#245174c45af709dd4007199fdec2a3e7aa750797:src/main/resources/application.properties:pse-credential-in-a-comment:24
+#245174c45af709dd4007199fdec2a3e7aa750797:src/main/resources/application.properties:pse-credential-in-a-comment:26
+#245174c45af709dd4007199fdec2a3e7aa750797:src/main/resources/application.properties:pse-known-credential-property:28

@@ -1,0 +1,101 @@
+# Rules for the shapes of secret THIS project leaks, on top of the default rule set.
+#
+# Why this file exists. The five credentials in docs/TODO.md were not all found by gitleaks --
+# three were found by reading application.properties, and the reason is written up there: the
+# generic-api-key rule decides on the VALUE, so a password containing punctuation or sitting
+# under its entropy floor is invisible to it.
+#
+# The consequence is not about those five, which are already written down. It is about
+# secrets:new: a password of that shape committed TOMORROW would not be caught either. These
+# rules decide on the PROPERTY NAME instead, which this project does know in advance, so the
+# value can be as unremarkable as it likes.
+#
+# Checked, not assumed. Against v8.30.1 in a throwaway repository holding synthetic values in
+# each of the shapes above: the defaults found 2 of 5, these rules find all 5. Then against
+# this repository's own working tree, which must stay silent -- the first draft reported nine
+# times and every one was wrong, and what they taught is written next to the rule each one
+# broke.
+[extend]
+useDefault = true
+
+# Build output is not source. `gitleaks dir` walks it; the CI jobs scan git history and never
+# see it, so this only matters to somebody running the scan locally -- which is exactly when a
+# wall of findings from target/ teaches them to ignore the tool.
+[allowlist]
+paths = ['''(^|/)target/''']
+
+# The credentials this repository is known to have published, keyed on the names used in
+# application.properties and docker-compose, so entropy and punctuation do not enter into it.
+[[rules]]
+id = "pse-known-credential-property"
+description = "A credential this project uses, assigned a literal value"
+# [ \t] rather than \s: \s matches a newline, so "spring.datasource.password=" with an EMPTY
+# value ran on and matched the NEXT property line. That was three of the nine false findings,
+# and it would have been three misses in the other direction had the file been laid out
+# differently -- the rule was reading two lines as one.
+# The value may not START with a closing brace. The allowlist below drops a ${...}
+# placeholder, but it is applied to the MATCH -- and "${ipinfo.token:}" matches from
+# "ipinfo.token" onwards, so the "${" that would have excused it sits outside the match and
+# the allowlist never sees it. docs/TODO.md quoting that placeholder was the last of the nine.
+regex = '''(?i)(spring\.datasource\.password|spring\.mail\.password|ipinfo\.token|geoapify\.api\.key|auth\.rate-?limit\.hmac-?key)[ \t]*[=:][ \t]*[^\s}][^\s]{3,}'''
+tags = ["pse", "credential"]
+
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    # Any ${...} placeholder, not just ${UPPER_CASE}. Spring's own property syntax nests a
+    # lowercase, dotted name -- ${ipinfo.token:} -- and the first draft, which insisted on
+    # capitals, reported docs/TODO.md for quoting it.
+    '''\$\{[^}]*\}''',
+    # An obvious fixture. The test properties and PostgresTestDatabase both set a real-looking
+    # hmac key on purpose; refusing to tell those apart from a live credential is how a
+    # scanner stops being read.
+    '''(?i)(test|smoke|dummy|fake|sample|example|changeme|localhost|placeholder)''',
+  ]
+
+# The same values written into a comment rather than an assignment. One of the two findings
+# gitleaks did report in 245174c was a comment, so comments are not inherently invisible to it
+# -- that one had the entropy for the generic rule and "ipinfo.io password: <something short>"
+# did not. A comment is where a credential goes when somebody is explaining it to the next
+# reader, which is exactly when it gets written out in full.
+[[rules]]
+id = "pse-credential-in-a-comment"
+description = "A password or token written into a comment"
+# The value must look like a value: 8+ characters, no spaces, and not the > of an arrow. The
+# first draft accepted 4+ and reported the javadoc line "32 Byte long Token => ...". A comment
+# rule that fires on prose about tokens is a comment rule nobody keeps.
+regex = '''(?i)(?://|#|\*)[^\n]{0,40}(password|passwort|api[- _]?key|token|secret)[ \t]*[:=][ \t]*[^\s>"'][^\s>"']{7,}'''
+tags = ["pse", "credential", "comment"]
+
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    '''\$\{[^}]*\}''',
+    '''(?i)(example|placeholder|redacted|changeme|<[a-z._-]+>|xxx+|\.\.\.|test|dummy|fake|sample)''',
+  ]
+
+# A bearer token pasted into Java, which is how testclient/TestClient.java published one for
+# three commits. The default rules did catch that value; this one does not depend on them
+# having the entropy for it.
+[[rules]]
+id = "pse-hardcoded-bearer-token"
+description = "A bearer or authorization value as a literal"
+regex = '''(?i)(bearer[ \t]+|authorization[ \t]*[=:][ \t]*")[A-Za-z0-9._\-]{16,}'''
+tags = ["pse", "credential"]
+
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    '''(?i)(\$\{|\+|<|\btoken\b|example|test|dummy|fake|sample|rawToken|getToken)''',
+  ]
+
+# A JDBC URL carrying its own password, which no amount of property-name matching would see.
+[[rules]]
+id = "pse-jdbc-url-with-a-password"
+description = "A JDBC URL with credentials inline"
+regex = '''jdbc:[a-z]+://[^\s"']*password=\S+'''
+tags = ["pse", "credential"]
+
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = ['''(?i)(\$\{[^}]*\}|test|localhost|example)''']

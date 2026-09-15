@@ -1,0 +1,645 @@
+workflow:
+  rules:
+    # Scheduled pipelines only run health:check and backup:offsite; every other job opts
+    # out of them below.
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    # A push to a branch with an open merge request already gets a merge_request_event
+    # pipeline. Without this, both run: two full Maven builds and two statuses per push.
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+stages:
+  - test
+  - package
+  - deploy
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  # mvnw unpacks its Maven distribution under $MAVEN_USER_HOME/wrapper/dists, which
+  # defaults to ~/.m2 -- outside the cache below. Every job re-downloaded the same 9 MB
+  # Maven zip, for no reason and with a network failure to lose to.
+  MAVEN_USER_HOME: "$CI_PROJECT_DIR/.m2"
+  IMAGE_TAG: "$CI_REGISTRY_IMAGE/server:$CI_COMMIT_SHORT_SHA"
+  COVERAGE_THRESHOLD: "30"
+  # Bundle line coverage, in two tiers. COVERAGE_LINE_MIN is the floor the build dies
+  # below; COVERAGE_LINE_TARGET is where the suite is trying to be -- missing it is a
+  # warning (the coverage:line-target job goes yellow) and does not block the pipeline.
+  COVERAGE_LINE_MIN: "90"
+  COVERAGE_LINE_TARGET: "95"
+  GIT_DEPTH: "0"
+
+default:
+  cache:
+    key: "maven-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .m2/repository/
+      - .m2/wrapper/
+    policy: pull-push
+
+server:test:
+  stage: test
+  image: maven:3.9-eclipse-temurin-21
+  before_script:
+    - |
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        git fetch --no-tags origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" || true
+      elif [ -n "$CI_DEFAULT_BRANCH" ]; then
+        git fetch --no-tags origin "$CI_DEFAULT_BRANCH:refs/remotes/origin/$CI_DEFAULT_BRANCH" || true
+      fi
+  script:
+    - ./mvnw -B -ntp verify
+    - java scripts/CheckChangedCoverage.java --threshold "$COVERAGE_THRESHOLD"
+    # The floor only. Missing the target prints a warning here and fails nothing; the
+    # coverage:line-target job below is what makes that warning visible in the pipeline.
+    - java scripts/CheckLineCoverage.java --min "$COVERAGE_LINE_MIN" --target "$COVERAGE_LINE_TARGET"
+  coverage: '/Changed code line coverage:\s*([0-9]+(?:\.[0-9]+)?)%/'
+  artifacts:
+    when: always
+    paths:
+      # Required by SonarCloud for precise Java analysis.
+      - target/classes/
+      - target/test-classes/
+
+      - target/site/jacoco/
+      - target/surefire-reports/
+
+      # The dependency:scan input. That job runs in a Trivy image with no Maven and no
+      # warm repository; this build has just resolved the whole tree, so it is the one
+      # that can write it down. See the comment on dependency:scan.
+      - target/classes/META-INF/sbom/application.cdx.json
+    reports:
+      junit:
+        - target/surefire-reports/TEST-*.xml
+      coverage_report:
+        coverage_format: jacoco
+        path: target/site/jacoco/jacoco.xml
+    expire_in: 1 week
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+# The optional tier. Marked allow_failure, so falling below COVERAGE_LINE_TARGET shows as a
+# yellow warning on the pipeline and still lets it pass -- the same shape backup:offsite uses
+# for a missing variable. It reuses server:test's JaCoCo artifact rather than rebuilding, so
+# it costs a container start and nothing else.
+coverage:line-target:
+  stage: test
+  image: eclipse-temurin:21-jdk
+  needs:
+    - job: server:test
+      artifacts: true
+  cache: []
+  allow_failure: true
+  script:
+    - java scripts/CheckLineCoverage.java --min "$COVERAGE_LINE_MIN" --target "$COVERAGE_LINE_TARGET" --fail-on-target
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+# Static analysis. Runs only when SONAR_TOKEN exists, so the pipeline is unchanged until
+# somebody creates the project on SonarCloud and adds the variable -- the same shape
+# backup:offsite uses for a missing variable, and the reason this job does not need to be
+# commented out while that is pending.
+#
+# allow_failure on purpose, for now: the first scan of a codebase this size raises hundreds
+# of issues and none of them are regressions. Turn it off once the baseline has been read
+# and a quality gate agreed -- until then a red pipeline would only teach people to ignore
+# it. The three variables it needs are listed in docs/deployment.md.
+sonarcloud:
+  stage: test
+  image: maven:3.9-eclipse-temurin-21
+  needs:
+    - job: server:test
+      artifacts: true
+  allow_failure: true
+  variables:
+    # Sonar reads git history to attribute issues to authors and to work out what is new.
+    # GIT_DEPTH is already 0 at the top of this file, which is what makes that possible.
+    SONAR_USER_HOME: "$CI_PROJECT_DIR/.sonar"
+  cache:
+    key: "sonar-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .sonar/cache
+      - .m2/repository/
+      - .m2/wrapper/
+  script:
+    # Reuses server:test's JaCoCo XML through `needs: artifacts` rather than re-running the
+    # suite: sonar.coverage.jacoco.xmlReportPaths in the pom points at exactly that file, so
+    # Sonar and jacoco:check report the same number by construction.
+    #
+    # target/classes and target/test-classes are also received from server:test so
+    # SonarJava can analyse the compiled production and test bytecode.
+    - >
+      ./mvnw -B -ntp sonar:sonar
+      -Dsonar.host.url="${SONAR_HOST_URL:-https://sonarcloud.io}"
+      -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+      -Dsonar.organization="$SONAR_ORGANIZATION"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$SONAR_TOKEN'
+      when: on_success
+    - when: never
+
+# Everything that needs a real PostgreSQL rather than the H2 translation the main test job
+# runs. A GitLab service is a plain TCP server -- no Docker socket, no privileged runner and
+# no Testcontainers dependency -- which is what lets the integration layer exist while the
+# local build stays Docker-free. Tests select themselves into this job with
+# @EnabledIfEnvironmentVariable on POSTGRES_SMOKE_JDBC_URL, so they are skipped everywhere
+# else rather than failing.
+server:postgres-integration:
+  stage: test
+  image: maven:3.9-eclipse-temurin-21
+  services:
+    - name: postgres:16
+      alias: postgres
+  variables:
+    POSTGRES_DB: postgres_smoke
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres_smoke_password
+    POSTGRES_SMOKE_JDBC_URL: jdbc:postgresql://postgres:5432/postgres_smoke
+    POSTGRES_SMOKE_USERNAME: postgres
+    POSTGRES_SMOKE_PASSWORD: postgres_smoke_password
+  script:
+    # Two Maven invocations, and the split is the point. The integration classes share one
+    # Spring context; the end-to-end ones need a different one (a real port, plus the mail
+    # capture) and two contexts against one database would reset the schema under each other.
+    # Separate JVMs cannot interleave, so each invocation is checked for exactly one context
+    # rather than the guard being weakened to allow two.
+    #
+    # Classes are named rather than pattern-matched: this job's cost is one Spring context per
+    # distinct configuration, and adding a class here is the moment to check which annotation
+    # it carries. See com.pse.support.PostgresIntegrationTest and PostgresE2ETest.
+    - |
+      run_layer() {
+        name="$1"
+        classes="$2"
+        log="postgres-$name.log"
+
+        # Written to a file rather than piped through tee: a pipe hands the job tee's exit
+        # status, so a failing test suite would pass. The log is printed either way.
+        if ./mvnw -B -ntp -Dtest="$classes" test > "$log" 2>&1; then
+          cat "$log"
+        else
+          cat "$log"
+          exit 1
+        fi
+
+        # One context, or the classes wiped each other's schema mid-run and everything above
+        # proved nothing. PostgresTestDatabase prints this line once per context it starts.
+        resets=$(grep -c "PostgresTestDatabase: resetting the public schema" "$log" || true)
+        echo "$name: Spring contexts started against PostgreSQL: $resets"
+        if [ "$resets" != "1" ]; then
+          echo "Expected exactly one. More than one means two classes in this invocation carry"
+          echo "different context configuration and reset the schema under each other."
+          exit 1
+        fi
+      }
+
+      run_layer integration PostgreSqlMigrationSmokeTests,AuditTimestampPrecisionPostgresTests,CursorPaginationPostgresTests,AuditJsonbRoundTripPostgresTests,ReadOnlyTransactionSweepPostgresTests,ConcurrencyPostgresTests
+      run_layer e2e EndToEndJourneyTests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+server:package:
+  stage: package
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  retry:
+    max: 2
+    when:
+      - script_failure
+  before_script:
+    - mkdir -p /kaniko/.docker
+    - printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}' "$CI_REGISTRY" "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" > /kaniko/.docker/config.json
+  script:
+    - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile "$CI_PROJECT_DIR/src/Dockerfile" --destination "$IMAGE_TAG" --skip-push-permission-check
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE != "schedule"'
+
+server:deploy:staging:
+  stage: deploy
+  image: alpine:3.20
+  needs:
+    - server:package
+  variables:
+    DEPLOY_COMPOSE_FILE: docker-compose.yml
+    # An undefined CI/CD variable expands to an empty string here, and "-e VAR=" sets the
+    # variable in the container to empty rather than leaving it unset. Spring's
+    # ${VAR:default} placeholders only fall back when a variable is absent, so an empty
+    # value silently wins over the defaults in application.properties. That is how the
+    # panel ended up with an empty CORS allow-list and answered every browser call with
+    # 403 "Invalid CORS request". Both values below therefore carry an explicit default.
+    #
+    # One origin, and it is the address the panel is actually served from. The panel and this
+    # backend now share a host, so its calls are same-origin and never reach the CORS check --
+    # this list is what is left over for anything that is not. The bw-cloud hostname was
+    # dropped from it deliberately: it still serves the API, because the released Android
+    # client hardcodes it (docs/deployment.md), but nothing is served from it as a browser
+    # origin any more.
+    DEFAULT_FRONTEND_ORIGINS: "https://ratemyprofessor.dev"
+    DEFAULT_BOOTSTRAP_EMAILS: "unzhz@student.kit.edu:Alparslan,ugoqu@student.kit.edu:Mustafa,ugjlu@student.kit.edu:Luis,uzvqy@student.kit.edu:Yavuz,uiolj@student.kit.edu:Philipp,uchbm@student.kit.edu:Enno"
+    DEFAULT_SUPERUSER_EMAILS: "unzhz@student.kit.edu"
+  before_script:
+    - apk add --no-cache openssh-client
+    - chmod 400 "$SSH_PRIVATE_KEY"
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+  script:
+    - |
+      # DEPLOY_PATH reaches the server through ssh and scp, where a relative value is
+      # resolved against the login directory. "home/ubuntu/deployAdress" therefore
+      # deployed into /home/ubuntu/home/ubuntu/deployAdress for months, and nothing in a
+      # diff could show it: the value lives in the settings page, not in this file. Fix it
+      # here rather than trusting that whoever fills that page in types a leading slash.
+      case "$DEPLOY_PATH" in
+        /*) ;;
+        "") echo "DEPLOY_PATH is not set" >&2; exit 1 ;;
+        *)  echo "DEPLOY_PATH '$DEPLOY_PATH' is relative -- deploying to '/$DEPLOY_PATH'"
+            DEPLOY_PATH="/$DEPLOY_PATH" ;;
+      esac
+    - |
+      # docker-compose.prod.yml declares both of these as ${VAR:?...}, which rejects an
+      # empty value as well as an unset one. Written empty they still reach the server and
+      # the deploy dies further down inside "docker compose pull", with a message naming
+      # neither the CI/CD variable nor this job.
+      for required in SPRING_DATASOURCE_PASSWORD AUTH_RATE_LIMIT_HMAC_KEY; do
+        eval "value=\${$required}"
+        if [ -z "$value" ]; then
+          echo "$required is empty. Set it under Settings > CI/CD > Variables." >&2
+          exit 1
+        fi
+      done
+    - |
+      write_env() {
+        key="$1"
+        value="$2"
+        escaped="$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g; s/[$]/\$/g')"
+        printf '%s="%s"\n' "$key" "$escaped" >> .deploy.env
+      }
+
+      : > .deploy.env
+      chmod 600 .deploy.env
+      write_env BACKEND_IMAGE "$IMAGE_TAG"
+      write_env SERVER_PORT "8080"
+      # The loopback prefix is load-bearing, not decoration. Without it Docker publishes the
+      # backend on 0.0.0.0:8080 and the API answers plain HTTP straight from the internet,
+      # bypassing nginx: no TLS, no HSTS, no edge access log. Every real request already
+      # arrives over 443, so nothing legitimate reaches port 8080 from outside.
+      write_env BACKEND_PUBLISHED_PORT "127.0.0.1:8080"
+      write_env SPRING_DATASOURCE_URL "${SPRING_DATASOURCE_URL:-jdbc:postgresql://host.docker.internal:5432/postgres}"
+      write_env SPRING_DATASOURCE_USERNAME "${SPRING_DATASOURCE_USERNAME:-postgres}"
+      write_env SPRING_DATASOURCE_PASSWORD "${SPRING_DATASOURCE_PASSWORD}"
+      write_env SPRING_FLYWAY_ENABLED "${SPRING_FLYWAY_ENABLED:-true}"
+      # false, not true: this database was baselined on 2026-09-05 and has a
+      # flyway_schema_history. Left at true, a deploy pointed at some other database with
+      # a schema but no history would quietly stamp it as version 1 and carry on, which
+      # is the one case where stopping and complaining is the useful behaviour.
+      write_env SPRING_FLYWAY_BASELINE_ON_MIGRATE "${SPRING_FLYWAY_BASELINE_ON_MIGRATE:-false}"
+      write_env ADMIN_FRONTEND_ORIGINS "${ADMIN_FRONTEND_ORIGINS:-$DEFAULT_FRONTEND_ORIGINS}"
+      write_env ADMIN_BOOTSTRAP_EMAILS "${ADMIN_BOOTSTRAP_EMAILS:-$DEFAULT_BOOTSTRAP_EMAILS}"
+      write_env ADMIN_SUPERUSER_EMAILS "${ADMIN_SUPERUSER_EMAILS:-$DEFAULT_SUPERUSER_EMAILS}"
+      write_env AUTH_RATE_LIMIT_HMAC_KEY "${AUTH_RATE_LIMIT_HMAC_KEY}"
+      write_env AUTH_OTP_TTL "${AUTH_OTP_TTL:-PT5M}"
+      write_env AUTH_ADMIN_SESSION_TTL "${AUTH_ADMIN_SESSION_TTL:-P1D}"
+      write_env AUTH_APP_SESSION_TTL "${AUTH_APP_SESSION_TTL:-${AUTH_STUDENT_SESSION_TTL:-P365D}}"
+      write_env AUTH_RATE_LIMIT_WINDOW "${AUTH_RATE_LIMIT_WINDOW:-PT15M}"
+      write_env AUTH_RATE_LIMIT_REQUEST_EMAIL "${AUTH_RATE_LIMIT_REQUEST_EMAIL:-3}"
+      write_env AUTH_RATE_LIMIT_REQUEST_IP "${AUTH_RATE_LIMIT_REQUEST_IP:-20}"
+      write_env AUTH_RATE_LIMIT_LOGIN_EMAIL "${AUTH_RATE_LIMIT_LOGIN_EMAIL:-10}"
+      write_env AUTH_RATE_LIMIT_LOGIN_IP "${AUTH_RATE_LIMIT_LOGIN_IP:-30}"
+      write_env SPRING_MAIL_HOST "${SPRING_MAIL_HOST}"
+      write_env SPRING_MAIL_PORT "${SPRING_MAIL_PORT:-587}"
+      write_env SPRING_MAIL_USERNAME "${SPRING_MAIL_USERNAME}"
+      write_env SPRING_MAIL_PASSWORD "${SPRING_MAIL_PASSWORD}"
+      write_env SPRING_MAIL_SMTP_AUTH "${SPRING_MAIL_SMTP_AUTH:-true}"
+      write_env SPRING_MAIL_STARTTLS "${SPRING_MAIL_STARTTLS:-true}"
+      write_env MAIL_FROM_ADDRESS "${MAIL_FROM_ADDRESS}"
+      write_env MAIL_FROM_NAME "${MAIL_FROM_NAME:-RateMyProfApp}"
+      write_env IPINFO_TOKEN "${IPINFO_TOKEN}"
+      write_env GEOAPIFY_API_KEY "${GEOAPIFY_API_KEY}"
+      write_env AUDIT_REVERT_WINDOW "${AUDIT_REVERT_WINDOW:-P7D}"
+      write_env GITLAB_BASE_URL "${GITLAB_BASE_URL}"
+      write_env GITLAB_PROJECT_ID "${GITLAB_PROJECT_ID}"
+      write_env GITLAB_TOKEN "${GITLAB_TOKEN}"
+      write_env GITLAB_TIMEOUT "${GITLAB_TIMEOUT:-PT10S}"
+    - >
+      ssh -i "$SSH_PRIVATE_KEY" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST"
+      "set -e; mkdir -p \"$DEPLOY_PATH\""
+    - >
+      scp -i "$SSH_PRIVATE_KEY" -P "$DEPLOY_PORT" docker-compose.prod.yml
+      "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/$DEPLOY_COMPOSE_FILE"
+    - >
+      scp -i "$SSH_PRIVATE_KEY" -P "$DEPLOY_PORT" .deploy.env
+      "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env"
+    - >
+      ssh -i "$SSH_PRIVATE_KEY" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST"
+      "set -e;
+      cd \"$DEPLOY_PATH\";
+      echo \"$CI_REGISTRY_PASSWORD\" | docker login \"$CI_REGISTRY\" -u \"$CI_REGISTRY_USER\" --password-stdin;
+      docker compose version;
+      docker compose -f \"$DEPLOY_COMPOSE_FILE\" --env-file .env pull backend;
+      docker rm -f app-server || true;
+      docker compose -f \"$DEPLOY_COMPOSE_FILE\" --env-file .env up -d --remove-orphans;
+      for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+        if docker compose -f \"$DEPLOY_COMPOSE_FILE\" --env-file .env exec -T backend curl -fsS http://localhost:8080/health; then
+          docker compose -f \"$DEPLOY_COMPOSE_FILE\" --env-file .env logs --tail 100 backend;
+          exit 0;
+        fi;
+        sleep 4;
+      done;
+      docker compose -f \"$DEPLOY_COMPOSE_FILE\" --env-file .env ps;
+      docker compose -f \"$DEPLOY_COMPOSE_FILE\" --env-file .env logs --tail 200 backend;
+      exit 1"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE != "schedule"'
+      when: manual
+
+# Runs only from a pipeline schedule. A failing job mails the schedule owner, which is the
+# whole point: the server was down for twelve days in July 2026 without anyone noticing.
+# It has to run here rather than in a cron on the server itself, because a cron dies together
+# with the machine it is supposed to watch.
+# Secret scanning, in two jobs because there are two different questions and only one of
+# them can be allowed to block.
+#
+# Why this exists at all: it is the one class of defect the test suite cannot reach. 876 tests
+# say nothing about a credential in a tracked file, and the bearer token in
+# testclient/TestClient.java was found by a person reading the file, not by anything that runs.
+# The first scan of this repository's history found five leaked credentials -- see
+# docs/TODO.md, which tracks the rotations. That is the argument for the job, made by the job.
+#
+# The image is pinned. A floating :latest would change the rule set under the pipeline, and a
+# scanner that starts failing on a day nobody touched the repository is a scanner people
+# switch off.
+
+# The blocking half: did *this change* add a credential? It scans only the commits the push
+# or the merge request brings, so it starts green -- everything it would have found is behind
+# the range -- and goes red the moment somebody commits a secret, which is while it is still
+# cheap to fix.
+secrets:new:
+  stage: test
+  image:
+    name: zricethezav/gitleaks:v8.30.1
+    # The image runs gitleaks as its entrypoint; GitLab needs a shell instead.
+    entrypoint: [""]
+  cache: []
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - |
+      # Which commits are new depends on how the pipeline was triggered, and neither answer
+      # can be trusted without checking. CI_COMMIT_BEFORE_SHA is all-zeros on the first push
+      # of a branch and stale after a force-push; a target branch may not be fetched. The
+      # coverage gate learned this the hard way -- it handed unverified refs to git merge-base
+      # and any git error killed the job with no output. So each candidate is verified before
+      # it is used, and the fallback is a scan of everything rather than a scan of nothing.
+      RANGE=""
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        git fetch --no-tags origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" || true
+        if git rev-parse --verify --quiet "refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" > /dev/null; then
+          RANGE="refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME..HEAD"
+        fi
+      fi
+      if [ -z "$RANGE" ] && [ -n "$CI_COMMIT_BEFORE_SHA" ] \
+         && [ "$CI_COMMIT_BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+         && git cat-file -e "$CI_COMMIT_BEFORE_SHA^{commit}" 2> /dev/null; then
+        RANGE="$CI_COMMIT_BEFORE_SHA..$CI_COMMIT_SHA"
+      fi
+
+      if [ -n "$RANGE" ]; then
+        echo "Scanning $RANGE"
+        gitleaks git . --no-banner --redact --platform gitlab --log-opts="$RANGE"
+      else
+        # No usable comparison point. Scanning the whole history here would fail on the known
+        # leaks and turn a blocking job permanently red, so this reports and defers to
+        # secrets:history, which is where the backlog belongs.
+        echo "No usable commit range (new branch, force-push, or unfetched target)."
+        echo "Nothing scanned here; secrets:history covers the full history nightly."
+      fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+
+# The dependency half of the security work, which docs/TODO.md carried as open for as long as
+# it did because neither tool could be made to work: Trivy resolves the Maven parent-pom chain
+# over the network and was rate-limited (429, Retry-After: 1800) from a shared IP, and OWASP
+# dependency-check needs an NVD_API_KEY nobody has created.
+#
+# The first CI run of this job went red on exactly that 429, and not on the failure this
+# comment used to tell you to suspect: Trivy's own database downloaded fine, then the scan died
+# fetching spring-integration-bom-7.0.6.pom from repo.maven.apache.org.
+#
+# The warm-cache answer the job shipped with does not hold on this runner. It read: "this job
+# caches .m2/repository like every other job here, and `needs: server:test` puts it after a job
+# that has just populated it". `needs` orders two jobs; it does not put them on one machine.
+# The runner log says "No URL provided, cache will not be downloaded from shared cache server",
+# so a cache lives on the Kubernetes node that wrote it: server:test filled .m2 on some node,
+# this job started on w3 with "Cache file does not exist", and the parent chain went to the
+# network. A cache is an optimisation that is allowed to miss; this job was treating it as an
+# input it was guaranteed to get.
+#
+# So the input is handed over as an artifact, which is not allowed to miss. server:test already
+# resolves the whole tree; cyclonedx-maven-plugin (declared in pom.xml, version managed by
+# spring-boot-starter-parent) writes it to target/classes/META-INF/sbom/application.cdx.json,
+# and `trivy sbom` reads that. Nothing here resolves a Maven coordinate any more, so a cold
+# repository cannot fail this job and the .m2 cache is gone from it.
+#
+# Verified locally on 9 September, in both directions, because a scan that looks at less than
+# it used to and a scan that cannot go red both look exactly like a pass:
+#   * it sees no less. The package list from `trivy sbom` and the list from the old
+#     `trivy fs .` are identical bar one entry -- the SBOM adds org.projectlombok:lombok, which
+#     Trivy's pom parser dropped. 107 packages, 0 vulnerabilities, the same 0 as the fs scan.
+#   * it can still go red. Rebuilding the SBOM against parent 4.0.6 -- the version 4.0.8
+#     replaced -- and scanning it exits 1 on 13 HIGH.
+#
+# Deliberately NOT allow_failure and NOT schedule-only, unlike secrets:history and pitest.
+# Those two are expected to be red; this one starts GREEN -- the same 9 September pass took the
+# count to 0 (parent 4.0.8, plus a tomcat override and a bouncycastle bump). A gate that is
+# green on the day it lands is a gate whose red means something, and the argument this file
+# already makes about health:check applies: an expected red teaches people to ignore it.
+#
+# --exit-code 1 with --severity HIGH,CRITICAL: a MEDIUM does not stop a merge request, and the
+# full report is in the artifact either way.
+dependency:scan:
+  stage: test
+  image:
+    name: docker.io/aquasec/trivy:latest
+    entrypoint: [""]
+  needs:
+    - job: server:test
+      artifacts: true
+  # No Maven cache: this job no longer reads a repository. `cache: []` rather than nothing,
+  # because the default at the top of this file would otherwise pull and push .m2 here.
+  cache: []
+  variables:
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivycache"
+    SBOM: "target/classes/META-INF/sbom/application.cdx.json"
+  script:
+    # The vulnerability database is Trivy's own and is still fetched per run. If THAT is what
+    # gets rate-limited on a shared runner IP, the failure is a database download and not a
+    # finding -- read the job log before believing a red here.
+    - trivy --version
+    # `trivy sbom` on a missing file fails too, with a message about the file rather than about
+    # the handover. Say which half broke.
+    - test -f "$SBOM" || { echo "no SBOM at $SBOM -- did server:test publish its artifacts?"; exit 1; }
+    - >
+      trivy sbom --scanners vuln
+      --format json --output trivy-report.json "$SBOM"
+    - >
+      trivy sbom --scanners vuln
+      --severity HIGH,CRITICAL --exit-code 1 "$SBOM"
+  artifacts:
+    when: always
+    paths:
+      - trivy-report.json
+    expire_in: 1 month
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+# Mutation testing. Schedule-only and allow_failure, like every job here whose red is
+# expected rather than new.
+#
+# What it adds over coverage: the suite is at 95.9% line coverage, which says every line ran.
+# It says nothing about whether any assertion would have failed had the line been wrong, and
+# that gap has been found by hand more than once in this repository (P-6 most clearly, an
+# assertion that could not fail). PIT answers it mechanically.
+#
+# The first run scored 67%: 1194 mutants, 797 killed, 73 survived, 324 with no coverage.
+# There is deliberately no threshold yet; see the pitest profile in pom.xml for why.
+#
+# READ THE REPORT WITH THIS CAVEAT, which the first run taught the hard way. The profile runs
+# only the eighteen context-free service unit tests, because pointing PIT at the whole suite
+# would start a Spring context per mutant and take hours instead of two minutes. That scoping
+# is also the report's main weakness:
+#
+#   NO_COVERAGE  the unit tests never reach the line. Says nothing about the suite -- the API,
+#                integration and end-to-end layers are not running here.
+#   SURVIVED     the unit tests reach it and do not kill it. A CANDIDATE, not a finding: the
+#                mutant may still be caught by a layer outside this profile.
+#
+# Checked empirically rather than assumed. "removed call to protectAdministrator" in
+# warnStudent survived here and looked like an untested authorization guard; deleting that call
+# for real turned two AdminApiIntegrationTests red. The guard was covered all along, by a layer
+# PIT was not running. So a survivor is worth investigating and is not worth a test until it
+# has been checked against the other layers -- writing one anyway just duplicates coverage that
+# already exists, which is what P-2 and P-4 in docs/test-findings.md are about.
+mutation:nightly:
+  stage: test
+  image: maven:3.9-eclipse-temurin-21
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      allow_failure: true
+  script:
+    # PIT prints its own summary line -- "Generated N mutations Killed M (X%)" -- to stdout,
+    # so the score is in this job's log without anything extra parsing it back out.
+    - ./mvnw -B -ntp -Ppitest test-compile org.pitest:pitest-maven:mutationCoverage
+  artifacts:
+    when: always
+    paths:
+      - target/pit-reports/
+    expire_in: 1 month
+
+health:check:
+  stage: test
+  image: alpine:3.20
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  cache: []
+  variables:
+    HEALTH_URL: "https://ratemyprofessor.dev/health"
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - |
+      STATUS=$(curl -s -o response.txt -w '%{http_code}' --max-time 20 "$HEALTH_URL" || echo 000)
+      echo "GET $HEALTH_URL -> HTTP $STATUS"
+      cat response.txt 2>/dev/null || true
+      echo
+      if [ "$STATUS" != "200" ]; then
+        echo "API is not healthy (expected 200, got $STATUS)."
+        exit 1
+      fi
+      echo "API is healthy."
+
+# Also schedule-only. The nightly pg_dumpall on the server is sound, but every copy of it
+# lives on the same disk as the database it came from -- a lost instance takes the backups
+# with it. This job is the off-machine copy, and it deliberately reuses the deploy key and
+# host variables rather than introducing a second credential to keep in sync.
+#
+# The dump carries real student e-mail addresses, so it is encrypted before it ever becomes
+# a job artifact: artifacts are downloadable by everyone with Reporter access to the project,
+# which is a wider audience than the database itself has.
+backup:offsite:
+  stage: test
+  image: alpine:3.20
+  rules:
+    # With the passphrase configured the job behaves normally: a real backup failure
+    # turns the pipeline red, which is what should happen.
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $BACKUP_PASSPHRASE'
+    # Without it the job still runs and still says what to do, but it does not fail the
+    # pipeline. health:check shares this scheduled pipeline and exists to be believed when
+    # it goes red -- the server was down for twelve days in July 2026 before it was added.
+    # A missing configuration variable must not drown out that signal every night.
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      allow_failure: true
+  cache: []
+  before_script:
+    - apk add --no-cache openssh-client gnupg
+  script:
+    - |
+      # Refuse to run rather than publish a readable dump. An empty passphrase would make
+      # gpg fall back to no protection at all, which is the one outcome worth failing over.
+      if [ -z "$BACKUP_PASSPHRASE" ]; then
+        echo "BACKUP_PASSPHRASE is not set -- refusing to export the database unencrypted."
+        echo "Add it under Settings > CI/CD > Variables (masked)."
+        exit 1
+      fi
+    - |
+      chmod 400 "$SSH_PRIVATE_KEY"
+      mkdir -p ~/.ssh
+      chmod 700 ~/.ssh
+      ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+    - |
+      SSH="ssh -i $SSH_PRIVATE_KEY -p $DEPLOY_PORT $DEPLOY_USER@$DEPLOY_HOST"
+
+      # The backup directory is 0700 root, so this reads through sudo -- and the glob has to be
+      # expanded inside that root shell, not by the login shell. As the login user the pattern
+      # matches nothing, and an unmatched glob is passed through literally, so a plain
+      # `sudo ls <pattern>` fails on every run.
+      LATEST=$($SSH "sudo sh -c 'ls -1t /var/backups/postgres/pgdumpall-*.sql.gz' 2>/dev/null | head -1")
+      if [ -z "$LATEST" ]; then
+        echo "No dump found in /var/backups/postgres -- has pg-backup.timer run?"
+        exit 1
+      fi
+      echo "Newest dump on the server: $LATEST"
+
+      $SSH "sudo cat '$LATEST'" > dump.sql.gz
+      # A dump that arrives truncated is worse than none, because it looks like a backup.
+      gzip -t dump.sql.gz
+      zcat dump.sql.gz | grep -q 'PostgreSQL database cluster dump complete'
+      echo "Transferred and verified: $(du -h dump.sql.gz | cut -f1)"
+
+      gpg --batch --yes --symmetric --cipher-algo AES256 \
+          --passphrase "$BACKUP_PASSPHRASE" \
+          --output "pgdumpall-$(date -u +%Y%m%d).sql.gz.gpg" dump.sql.gz
+      rm -f dump.sql.gz
+      ls -la ./*.gpg
+    - |
+      echo "Restore with:  gpg -d pgdumpall-YYYYMMDD.sql.gz.gpg | gunzip | psql -U postgres"
+  artifacts:
+    name: "pg-backup-$CI_PIPELINE_ID"
+    paths:
+      - "*.sql.gz.gpg"
+    expire_in: 30 days

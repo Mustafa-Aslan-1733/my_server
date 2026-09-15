@@ -1,0 +1,12 @@
+[Unit]
+Description=Reattach app-server container to Docker bridge network after boot
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/app-server-netfix.sh
+
+[Install]
+WantedBy=multi-user.target

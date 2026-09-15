@@ -1,0 +1,1046 @@
+Changed following Interfaces:
+
+
+Changes at "/information" Interface:
+- "/information"  renamed to "account"
+
+
+
+Changes at "/social" Interface:
+- "/submitComment"  renamed to "comments"
+- "/submitAnswer"  renamed to "answers"
+- "/submitCommentReport"  renamed to "/comments/report"
+- "/submitAnswerReport"  renamed to "/answers/report"
+
+
+
+14.07
+
+Added Up/Down Votes to Comments/answers
+
+=> Changed GET Comments
++ added 2 int's fpr upVotes and downVotes
+
+public record CommentResponse(
+        String content,
+        ContentStatus status,
+        String studentUsername,
+        UUID lectureID,
+        LocalDateTime createdAt,
+++      int downVotes,
+++      int upVotes,
+
+        List<AnswerResponse> answers
+
+) {
+}
+
+
+public record AnswerResponse(
+        UUID commentId,
+        String content,
+        ContentStatus status,
+        String studentUsername,
+        LocalDateTime createdAt,
+++      int downVotes,
+++      int upVotes
+) {
+}
+
+
+
+
+One Lecture can have multiple Profs
+public record LectureResponse(
+        UUID id,
+        String name,
+        String code,
+        int semesterYear,
+        SemesterSeason semesterSeason,
+        boolean active,
++++     List<UUID> professorIds,        //was: UUID professorId
+        String professorFirstName,
+        String professorLastName,
+        int commentCount,
+        int ratingCount
+) {}
+
+
+OLD:
+public record LectureResponse(
+        UUID id,
+        String name,
+        String code,
+        int semesterYear,
+        SemesterSeason semesterSeason,
+        boolean active,
+        List<UUID> professorIds,
+--      String professorFirstName,
+--      professorLastName,
+++      List<ProfessorShortResponse> professors,
+        int commentCount,
+        int ratingCount
+) {}
+
+NEW:
+public record LectureResponse(
+        UUID id,
+        String name,
+        String code,
+        int semesterYear,
+        SemesterSeason semesterSeason,
+        boolean active,
+        List<ProfessorShortResponse> professors,
+        int commentCount,
+        int ratingCount
+) {}
+
+
+
+++ New
+public record ProfessorShortResponse(
+        UUID id,
+        String firstName,
+        String lastName
+) {
+}
+
+
+
+
+28.07
+
+Added "log out from all devices" endpoint
+
+++ POST /auth/logout-all
+   - requires "Authorization: Bearer <authToken>" header (missing/invalid => 401)
+   - no request body
+   - revokes every auth token of the calling account, including the caller's own device
+   - the account is not deleted; email + OTP login still works afterwards
+   - returns BasicResponse: {"message": string, "success": boolean}
+
+
+
+09.08
+
+Edited Interface GET "/social/comments/{lecture_id}
+
+Was:
+public record CommentResponse(
+
+        UUID commentID,
+        String content,
+        ContentStatus status,
+        String studentUsername,
+        UUID lectureID,
+        LocalDateTime createdAt,
+        int downVotes,
+        int upVotes,
+
+        List<AnswerResponse> answers
+
+) {
+}
+Now:
+public record CommentResponse(
+
+        UUID commentID,
+        String content,
+        ContentStatus status,
+        String studentUsername,
++++     String profilePicture,
+        UUID lectureID,
+        LocalDateTime createdAt,
+        int downVotes,
+        int upVotes,
+
+        List<AnswerResponse> answers
+
+) {
+}
+
+
+
+Was:
+public record AnswerResponse(
+        UUID commentID,
+        String content,
+        ContentStatus status,
+        String studentUsername,
+        LocalDateTime createdAt,
+        int downVotes,
+        int upVotes
+) {
+}
+Now:
+public record AnswerResponse(
+        UUID commentID,
+        String content,
+        ContentStatus status,
+        String studentUsername,
++++     String profilePicture,
+        LocalDateTime createdAt,
+        int downVotes,
+        int upVotes
+) {
+}
+
+was:
+public record StudentProfileResponse(
+        String message,
+        boolean success,
+        String username,
+        double averageRating,
+        int ratingsCount,
+        int commentsWritten,
+        int credibilityScore
+) {}
+
+now:
+public record StudentProfileResponse(
+        String message,
+        boolean success,
+        String username,
++++     String profilePicture,
+        double averageRating,
+        int ratingsCount,
+        int commentsWritten,
+        int credibilityScore
+) {}
+
+
+
+
+///// 5.09
+
+
+Changed Signature 
+Was: "/ratingsown/{lectureId}"
+Now: "/ratings/own/{lectureId}"
+
+
+
+
+///// 6.09
+
+
+Split the Admin Web API from the app API.
+
+The session you get now depends on which login you called, not on whether the account
+is an admin. This is what fixes admins being logged out of the app on the admin schedule.
+
+New: "/admin/auth/login"  -> admins only, admin session, expires after 1 day
+     "/admin/auth/request-login", "/admin/auth/logout", "/admin/auth/logout-all", "/admin/auth/me"
+
+Unchanged for the app: "/auth/login" -> everyone, admin or not, gets 365 days.
+Nothing to change in the app. The "sessionType" field still works but is no longer needed.
+
+Every admin route also answers under "/admin" now: the new path is "/admin" + the old one.
+Old paths still work until the panel has moved. Exceptions that do NOT move:
+  "POST /reports"                  student bug submission, app API
+  "GET /data/lectures", "GET /data/professor", and the single-item reads   public
+
+LoginResponse gained a field:
+public record LoginResponse(
+        String message,
+        boolean success,
+        String authToken,
++++     String expiresAt
+) {}
+
+
+///// 8.09
+
+
+Admin sessions are one day again.
+
+The two-minute admin session was a temporary experiment, to watch that a short admin
+lifetime could no longer log an administrator out of the app. It could not, and the
+experiment is over: "POST /admin/auth/login" issues a one-day session from the next
+deployment on.
+
+Nothing about the app API changed. "POST /auth/login" still returns 365 days, for
+administrators too. The lifetime is decided by the endpoint you called, not by the account.
+
+Read "expiresAt" from the login response rather than assuming either number.
+
+
+///// 8.09 (2)
+
+
+Creating a lecture or a professor is now recorded in the audit log.
+
+Two new values can appear in "GET /admin/audit-logs" and in its "/meta" enum list:
+
+    LECTURE_CREATED
+    PROFESSOR_CREATED
+
+Both are administrative actions. Updating or deleting a lecture already wrote an entry;
+creating one wrote nothing, so the log could show a rename with no record of where the
+row came from.
+
+Neither is revertible, and that is deliberate: the entry is a lifecycle event
+("changes": {"exists": {"before": false, "after": true}}), not a field diff, so
+"POST /admin/audit-logs/{id}/revert" answers ACTION_NOT_REVERTIBLE. Undoing a creation
+is a deletion, which is its own audited action. This is the same shape
+USER_WARNING_CREATED has always had.
+
+Panels that render the action list from "/meta" pick these up on their own. One that
+hard-codes the vocabulary needs the two values added.
+
+Also: three fields in the audit responses are now declared nullable in the OpenAPI
+schema, because they always could be null and the schema said otherwise --
+"revertBlockedReason" and "revertedByAuditId" on an entry, and "target.id", which a
+refusal has no value for. No response changed; only the schema now describes them
+correctly.
+
+
+///// backfill -- shipped between 20.08 and 8.09, never written down here
+
+
+Everything below this line was already released and was missing from this file. It is
+collected here rather than back-dated into the middle, so nothing that was written at the
+time appears to have changed. It comes out of the four test layers; docs/test-findings.md
+holds the full reasoning for each, under the finding number given in brackets.
+
+
+1. Failures carry HTTP status codes now, not 200.  [F-5]
+
+Was: 200 {"message": "Error, couldn't find student", "success": false}
+Now: 404 {"message": "Error, couldn't find student", "success": false}
+
+StudentService, AccountService and SocialService served every failure as a 200 with
+"success": false, while the moderation services already threw and answered 400/404 for the
+same situations. Two error contracts in one API. They are one now.
+
+The BODY IS UNCHANGED in every case. A client that reads "success" has nothing to do. A
+client that reads the status now sees the failure it was already being told about.
+
+
+2. A vote can be taken back.  [F-3]
+
+VoteType gained a third value:
+
+    UP
+    DOWN
++++ NONE     withdraws the vote -- the row is deleted
+
+Send "NONE" to POST /social/comments/vote/comment/{id} or .../vote/answer/{id} to remove a
+vote. Withdrawing a vote that was never cast is not an error.
+
+Additive on purpose: a client that only ever sends UP or DOWN cannot tell the difference. A
+second identical vote still rewrites the first, exactly as before -- making that a toggle
+would have changed silently what an existing client's retry does.
+
+
+3. An invalid "voteType" is a 400 instead of a 409.  [F-2]
+
+Was: 409 {"message": "State conflict"}          (from a database constraint, at flush time)
+Now: 400 {"message": "Invalid request"}
+
+A null or unknown voteType used to travel down to the column and fail there. It is rejected
+at the boundary now, and the status says "your request was wrong" rather than "the server is
+in a conflicting state".
+
+
+4. The answer-vote route had a missing slash.  [F-4]
+
+Was: POST /social/comments/vote/answer{answer_id}     -> /social/comments/vote/answer<uuid>
+Now: POST /social/comments/vote/answer/{answer_id}
+
+BREAKING, and deliberately not served on both paths: the old spelling was a typo, not a
+contract. An Android build still on the old path gets a 404 on the vote call. The comment
+side (.../vote/comment/{comment_id}) was always correct and is untouched.
+
+
+5. A wrong HTTP verb is a 405, not a 404.  [F-16]     -- every route
+
+Was: 404 {"message": "Not found"}
+Now: 405 {"message": "Method not allowed"}  + an "Allow" header naming the verbs that work
+
+A path that does not exist is still a 404. Until now the two were indistinguishable from the
+response, which is why "POST /admin/reports" looked like a missing route rather than a route
+that only answers GET.
+
+
+6. A body in the wrong media type is a 415, not a 500.  [F-17]   -- every route with a body
+
+Was: 500 {"message": "Unexpected backend error"}
+Now: 415 {"message": "Unsupported media type"}
+
+Malformed JSON inside the CORRECT media type was and stays a 400. So: 415 means "do not send
+me text/plain", 400 means "your JSON is broken".
+
+
+7. Two routes that answered 500 answer properly now.  [F-14, F-15]
+
+    GET /data/professor/id            without firstName/lastName    500 -> 400
+    GET /ratings/{lectureId}/categories   unknown lecture id        500 -> 404
+
+
+8. GET /ratings/own/{lectureId} no longer answers "ratings": null.
+
+Was: {"message": "...", "success": false, "ratings": null}
+Now: {"message": "...", "success": false, "ratings": []}
+
+null was the answer for any lecture the student had not rated -- which is every lecture that
+has no ratings yet. A client iterating the field without a null check crashed on it. It is
+an empty list now, always.
+
+An unknown lecture id on the same route is a 404 rather than a successful-looking body, the
+same answer GET /ratings/{lectureId}/categories gives beside it.
+
+
+9. GET /system/status reports whether location lookup is working.  [F-8]
+
++++ "locationLookupEnabled": true | false
+
+Next to "gitlabEnabled" and for the same reason. False means IPINFO_TOKEN is missing or
+revoked and login mails will say "Unknown" for the location -- which used to happen with no
+log line at all.
+
+
+10. Three message typos are corrected.  [F-10]
+
+Was: "Error, couldnt authenticate user"    Now: "Error, couldn't authenticate user"
+Was: "Error, couldnt find student"         Now: "Error, couldn't find student"
+Was: "Deleted Account succesfully: ..."    Now: "Deleted Account successfully: ..."
+
+They reach the user interface through BasicResponse.message. If you match on these strings,
+match on the corrected spelling.
+
+
+Not in this file, because no interface changed: the four test layers (unit, API/role,
+contract, integration, end-to-end -- 867 tests), the CI/CD repairs, and the audit and revert
+fixes that are internal. docs/test-plan.md and docs/test-findings.md hold those.
+
+
+///// 8.09 (3)
+
+
+LectureResponse gained two fields, and its professor list has a fixed order now.
+
+public record LectureResponse(
+        UUID id,
+        String name,
+        String code,
+        int semesterYear,
+        SemesterSeason semesterSeason,
++++     String semesterLabel,
++++     String title,
+        boolean active,
+        LectureType lectureType,
+        List<ProfessorShortResponse> professors,
+        int commentCount,
+        int ratingCount,
+        double averageRating
+) {}
+
+"semesterLabel" is the semester the way it is written at the university:
+
+    SS26        summer semester 2026
+    WS25/26     winter semester, which spans two calendar years
+
+"semesterYear" on a winter lecture is the year the semester STARTS in. Say so if your data
+means the other one, because nothing in the schema records which.
+
+"title" is what a rating screen puts above a lecture:
+
+    "SS26 Algorithmen 1 — Peter Sanders, Anna Bauer"
+
+and, for a lecture with nobody assigned to it, just "SS26 Algorithmen 1" — no trailing dash.
+Both fields are derived: there is no column behind either, and neither can be written.
+
+They are computed here and not in each client so that the "WS25/26" rule lives in one place.
+Three apps formatting it themselves is three chances to publish "WS25".
+
+"professors" is now ordered by last name, then first name, then id, in every response that
+carries a lecture. It used to come out of a Set in whatever order the JVM felt like, which
+could differ between two requests for the same lecture. If you build your own title, this is
+what made it reshuffle. The same applies to "lectureIds" in ProfessorResponse, ordered by
+lecture name now.
+
+One thing this does NOT do: the order is alphabetical, not "lecturer first, exercise leaders
+after". The database records that a person teaches a lecture and nothing more, so nobody can
+tell a professor from an Übungsleiter. That needs a new column on lecture_professors — tell
+us if you want it.
+
+Also corrected in docs/admin-api.md, where it had been wrong since the file was written: the
+LectureResponse example showed "semesterSeason":"WINTER". The only accepted values are "SS"
+and "WS"; "WINTER" is answered with 400 {"message":"Invalid request"}.
+
+
+///// 8.09 (4)
+
+
+"GET /auth/me" is gone for good. Use "GET /admin/auth/me".
+
+It had already stopped answering some weeks ago -- it was removed from the app API and the
+removal was deliberate, but this file and docs/admin-api.md still described it as a legacy
+path that would keep working until the panel had migrated. They no longer do. There is no
+plan to bring it back.
+
+    GET /auth/me          removed, answers 404
+    GET /admin/auth/me    unchanged, and the one to call
+
+The admin route returns exactly what the old one did:
+
+  {"message", "success", "user": {"id", "username", "kitEmail", "role", "status",
+                                  "isSuperAdmin"}}
+
+Panel teams: this was the fifth line of task 1 in docs/adminweb-tasks.md. It is not a
+migration any more, it is a deletion -- if anything still calls "/auth/me" it is already
+getting a 404.
+
+
+///// 8.09 (5)
+
+
+The four create failures carry a status code now. F-5, finished.
+
+"POST /data/lectures" and its "/admin" twin:
+
+Was: 200 {"message": "Lecture already exists: <name>", "success": false}
+Now: 409 {"message": "Lecture already exists: <name>", "success": false}
+
+Was: 200 {"message": "Professor not found: <uuid>", "success": false}
+Now: 404 {"message": "Professor not found: <uuid>", "success": false}
+
+"POST /data/professor" and its "/admin" twin:
+
+Was: 200 {"message": "Professor already exists: <first> <last>", "success": false}
+Now: 409 {"message": "Professor already exists: <first> <last>", "success": false}
+
+Was: 200 {"message": "Couldn't find lecture with lectureID: <uuid>", "success": false}
+Now: 404 {"message": "Couldn't find lecture with lectureID: <uuid>", "success": false}
+
+The BODY IS UNCHANGED in all four, message text included. A client that reads "success" has
+nothing to do. A client that reads the status -- or that treats a non-2xx as a transport
+error and never opens the body -- now has to handle 409 and 404 on these two routes.
+
+These were the last two services answering a create failure with 200. The rest moved under
+F-5 in the backfill above; these two were left behind because four tests pinned the old
+answers. Those tests were inverted rather than deleted, so they state the new contract now.
+
+Nothing else on either route changed. A successful create still answers 200 with
+"success": true, and an invalid body is still 400 {"message": "Invalid request"}.
+
+
+///// 9.09
+
+
+The two catalogue detail reads answer 404 for a row that is not there.
+
+"GET /data/lectures/{id}":
+
+Was: 200 {"message": "Couldn find lecture with uuid: <uuid>", "success": false, "lecture": null}
+Now: 404 {"message": "Lecture not found", "success": false}
+
+"GET /data/professor/{id}":
+
+Was: 200 {"message": "Couldn't find prof with uuid: <uuid>", "success": false, "professor": null}
+Now: 404 {"message": "Professor not found", "success": false}
+
+Note the SECOND line of each, not only the status. The error body is the project's standard
+{"message", "success"}, so the "lecture" / "professor" key is now ABSENT rather than null. A
+client reading `body.lecture == null` is unaffected -- a missing key deserialises to null in
+Jackson, Moshi and Gson alike. A client that checks whether the key is present has to change.
+The message text changed too, so anything matching on it has to change.
+
+These were the last two reads answering a failure with 200. Every other read in the catalogue
+-- "GET /ratings/{lectureId}", "GET /ratings/{lectureId}/categories" -- has answered 404 since
+F-5 and F-15. Both routes are public, so an unknown id was reachable without a token.
+
+A successful read is unchanged: 200 with "success": true and the payload.
+
+
+///// 9.09 (2)
+
+
+"POST /audit-logs/{id}/revert" no longer answers 500 for a refusal entry.
+
+Was: 500 {"message": "Unexpected backend error", "success": false}
+Now: 409 {"message": "LOGIN_REFUSED cannot be reversed", "success": false,
+          "reason": "ACTION_NOT_REVERTIBLE"}
+
+Applies to LOGIN_REFUSED and ACCESS_REFUSED -- the entries that record something that did NOT
+happen, and therefore carry no target id. Both reach the panel through "GET /activity-logs",
+so an operator could see one and click revert on it.
+
+Panel teams: this is the answer "GET /activity-logs" was already giving you for these rows.
+Its "revertBlockedReason" said ACTION_NOT_REVERTIBLE and the revert behind it crashed, so a
+panel that trusted the list never noticed and one that let the operator try got a 500 with
+nothing to show them. Nothing to change if you read "revertible" from the list; if you
+special-cased the 500, that can go.
+
+Every other revert answer is unchanged.
+
+
+///// 9.09 (3)
+
+
+The four "/social" submit routes answer 400 for a bad id instead of 500.
+
+    POST /social/comments          "lectureID"
+    POST /social/answers           "commentID"
+    POST /social/comments/report   "commentID"
+    POST /social/answers/report    "answerID"
+
+Was: 500 {"message": "Unexpected backend error", "success": false}
+Now: 400 {"message": "Invalid lecture id", "success": false}          (malformed)
+Now: 400 {"message": "Invalid request", "success": false}             (missing)
+
+Two cases, and the second is the one worth reading twice: an id that is MISSING was a 500 as
+well, not only a malformed one. The routes now also require "content" on the two submits and
+"reportReason" on the two reports, which were unvalidated and could reach the database as
+null. "explanation" stays optional.
+
+Was: 500 for {"lectureID":"not-a-uuid","content":"x"}
+Was: 500 for {"content":"x"}                            -- no lectureID at all
+Was: 500 for {"lectureID":"<valid>"}                     -- no content
+Now: 400 for all three.
+
+Nothing changes for a well-formed request. If you were treating a 500 from these routes as
+"retry later", that retry was never going to work -- the request was the problem, and it now
+says so.
+
+
+///// 9.09 (4)
+
+
+Two more malformed bodies that answered 500 now answer 400.
+
+"POST /ratings/rate" -- "lectureId" and "topics" were both unvalidated:
+
+Was: 500 for {"topics":[]}                                  -- no lectureId
+Was: 500 for {"lectureId":"<uuid>"}                         -- no topics
+Was: 409 for a topic with no "category"                     -- reached the column as null
+Now: 400 {"message": "Invalid request", "success": false}   -- all three
+
+"topics" is required but may still be EMPTY: an empty list is answered exactly as before, so
+only a body that omits the field entirely changes. A topic's "value" is still unconstrained --
+nothing in the backend defines the scale, so nothing here invents one.
+
+"POST /data/lectures" and "POST /admin/data/lectures" -- "professorIds" omitted:
+
+Was: 500 {"message": "Unexpected backend error", "success": false}
+Now: 200, the lecture is created with no professors
+
+This one is the opposite direction on purpose. The field is optional -- the assignment is
+writable afterwards through "PATCH /admin/data/professor/{id}" -- and "POST /data/professor"
+has always read its mirror field that way. Sending "professorIds": [] was already accepted and
+is unchanged; only omitting the key was broken.
+
+
+///// 9.09 (5)
+
+
+"ratingCount" on a professor is the number of ratings. It used to be 0, always.
+
+    GET /data/professor
+    GET /data/professor/{id}
+    GET /admin/data/professor/all
+
+Was: "ratingCount": 0      for every professor, however many ratings they had
+Now: "ratingCount": 12     the ratings on every lecture they teach
+
+The field was read from a stored column that nothing in the application ever wrote -- no
+default, no trigger, no code path. "averageRating" beside it has been recomputed on read all
+along and was correct, which is why this was not obvious from the response.
+
+Panel and app: if you were hiding or ignoring this field because it was always 0, it is worth
+showing now. If you were displaying it, it was wrong and now is not.
+
+
+///// 9.09 (6)
+
+
+"GET /ratings/{lectureId}" returns its categories in a fixed order.
+
+Was: "ratings" in an unspecified order that changed between restarts, and differed between
+     two instances of the service answering the same request
+Now: "ratings" in RatingCategory declaration order -- ROOM, ORGANIZATION, MATERIALS,
+     WORKLOAD, LECTURE_*, PROFESSOR_*, EXERCISE_*, TUTOR_*
+
+The averages were collected in a HashMap keyed by the enum, and an enum's hash code is its
+identity hash, so the order was whatever the JVM's object layout produced that run. The route
+is public and unauthenticated.
+
+Nothing to change if you sort or look up by category. If you were rendering the list in the
+order it arrived, it will stop reshuffling -- this is the same defect F-21 fixed for a
+lecture's professor list.
+
+
+///// 9.09 (7)
+
+
+"POST /ratings/rate" answers 404 for a lecture that does not exist.
+
+Was: 200 {"message": "Error, cannot find lecture with id <uuid>", "success": false}
+Now: 404 {"message": "Lecture not found", "success": false}
+
+The last route in the ratings module still reporting a failure with 200. The two reads either
+side of it -- "GET /ratings/{lectureId}" and "GET /ratings/{lectureId}/categories" -- have
+answered 404 for the same unknown id since F-15, so a client had to handle both conventions
+depending on which of the three it called.
+
+The message text changed, so anything matching on it has to change. A successful submission is
+untouched.
+
+
+///// 9.09 (8)
+
+
+"POST /admin/audit-logs/{id}/revert" now works on a report status change that hid content.
+
+Was: 409 {"message": "COMMENT_REPORT_STATUS_CHANGED cannot be reversed",
+          "success": false, "reason": "ACTION_NOT_REVERTIBLE"}
+Now: 200 -- the report goes back to its previous status and the comment or answer it hid
+     becomes visible again
+
+The listing said so too: "revertible" was false on those entries and "revertBlockedReason"
+read ACTION_NOT_REVERTIBLE, so a panel drawing the button from that flag correctly did not
+draw it. Both now report revertible: true.
+
+Only the entries that changed visibility were affected -- that is, every transition into or
+out of ACTION_TAKEN, which is the whole reason the revert exists for this action. Those
+entries record two changed fields ("status" and "commentStatus"/"answerStatus") and the
+revert handler published only the first, so the service refused the entry as carrying a
+field it could not restore.
+
+Panel: entries you were hiding the revert button on will now offer it. Nothing to change if
+you read "revertible" from the response, which is what it is there for.
+
+
+///// 9.09 (9)
+
+
+"POST /admin/data/lectures" stores the name and code trimmed, and refuses a duplicate that
+differs only by whitespace.
+
+Was: "  Algorithmen 1  " stored with its padding, and accepted alongside an existing
+     "Algorithmen 1"
+Now: stored as "Algorithmen 1", and the second one answers
+     409 {"message": "Lecture already exists: Algorithmen 1", "success": false}
+
+"POST /admin/data/professor" already stored the trimmed name but ran its uniqueness check on
+the untrimmed one, so " Stefan" / "Kuehnlein " walked past the 409 and created a second
+professor holding exactly the name the first one holds. It now checks what it stores.
+
+Was: 200, a duplicate professor row
+Now: 409 {"message": "Professor already exists: Stefan Kuehnlein", "success": false}
+
+Nothing to change if you already trim in the form. If you were relying on padding to create
+near-duplicate rows, that no longer works -- which was the point.
+
+One side effect worth knowing: a lecture created with a padded name used to record a bogus
+"name" change in the audit log on its first admin edit, because the PATCH path trims before
+comparing and the stored value did not. New lectures cannot get into that state.
+
+
+///// 9.09 (10)
+
+
+"PATCH /admin/users/{id}" refuses to demote an administrator who has dispositioned a bug
+report.
+
+Was: 200, the administrator was demoted and the bug reports it had dealt with lost their
+     attribution silently
+Now: 409 {"message": "Administrator has moderation history and cannot be demoted",
+          "success": false}
+
+No new rule -- this is the rule that was already documented, applied to the third of its three
+sources. Demotion has always been refused for an administrator who issued a warning or
+reviewed a comment or answer report. Bug reports were meant to count too and could not:
+"resolved_by_admin_id" existed with a foreign key and nothing in the application had ever
+written it.
+
+"PATCH /admin/reports/{id}" now records who changed a bug report's status, and when, the same
+way the comment and answer report endpoints have always recorded it. Neither field appears in
+any response, so the only thing a client sees is the 409 above. Moving a report back to OPEN
+clears them again.
+
+Panel: an administrator who only ever worked the bug queue can no longer be demoted. Strip the
+attribution first, or leave the account an administrator -- the same choice that already
+applied to warnings.
+
+
+///// 9.09 (11)
+
+
+Four more lists that had no defined order now have one. Same defect as F-21 and F-27, in the
+places those two fixes did not reach.
+
+    GET /ratings/own/{lectureId}
+    GET /admin/ratings
+
+Was: "ratings" / "topics" in whatever order the database returned them
+Now: RatingCategory declaration order -- OVERALL, ROOM, ORGANIZATION, MATERIALS, WORKLOAD,
+     LECTURE_*, PROFESSOR_*, EXERCISE_*, TUTOR_*
+
+The same order "GET /ratings/{lectureId}" has had since 9.09 (6). One response field cannot
+have two orders, and these two were reading a JPA collection with no ORDER BY while the third
+had been given an EnumMap.
+
+    GET /social/comments/{lecture_id}
+    GET /social/sync/comments
+
+Was: "comments" unordered, and "answers" under each comment unordered
+Now: comments newest first, answers oldest first
+
+Both listings had no ORDER BY at all, while the admin listing beside them always had one. The
+answers are oldest first because a thread under a question reads forwards; the comments are
+newest first, matching "GET /admin/comments".
+
+    GET /admin/audit-logs
+    GET /admin/activity-logs
+
+Was: "changes.professors" and "changes.lectures" recorded the id list in the order the
+     in-memory Set produced, which can differ between two runs of the same code
+Now: sorted
+
+Only the recorded value moved. Whether an assignment counts as changed was already
+order-insensitive -- that half was BUG-3's fix; this is the half it did not reach.
+
+Nothing to change if you sort or look up by key. If you render any of these lists in the order
+they arrive, they will stop reshuffling.
+
+
+///// 9.09 (12)
+
+
+"POST /admin/audit-logs/{id}/revert" refuses an entry whose recorded value cannot be read back,
+instead of answering 500.
+
+Was: 500 {"message": "Unexpected backend error", "success": false}
+Now: 409 {"message": "The recorded value for '<field>' cannot be read back",
+          "success": false, "reason": "ACTION_NOT_REVERTIBLE"}
+
+No new "reason" value -- ACTION_NOT_REVERTIBLE already covers it, so nothing branching on the
+five documented reasons has to change.
+
+This cannot be triggered by anything a client sends. It happens when an audit entry names a
+value the current code no longer understands: an enum constant that has since been renamed or
+removed, or a number that no longer parses. The entry still reports revertible: true, because
+revertibility is decided by comparing recorded values as text, so the panel draws the button
+and pressing it used to report a backend failure for what is really an unreversible entry.
+
+
+///// 9.09 (13)
+
+
+"POST /auth/validate" refuses an address that is not the token owner's.
+
+Was: 200 {"message": "Error, wrong email for auth Token", "success": false}
+Now: 401 {"message": "Not logged in", "success": false}
+
+The last route still reporting an authorization failure with 200. Everything else about the
+endpoint is unchanged: a matching address still answers
+200 {"message": "Correct auth-Token for email: ...", "success": true}.
+
+The message text changed, so anything matching on it has to change. If you were branching on
+"success" you now get a 401 for the same case, which is the same answer this endpoint already
+gave when the Authorization header was missing entirely.
+
+
+///// 9.09 (14)
+
+
+A request body over the upload size limit answers 413 instead of 500.
+
+Was: 500 {"message": "Unexpected backend error", "success": false}
+Now: 413 {"message": "Payload too large", "success": false}
+
+No endpoint here accepts a file upload, so this is only reachable by sending a
+"multipart/form-data" body to a route that reads JSON. It appears in the production logs, which
+is why it is being answered properly rather than left to the catch-all.
+
+A malformed multipart body is unchanged: it still answers 415, because no route in this API can
+read that media type. Nothing to change unless you were treating the 500 as a backend outage --
+it never was one.
+
+
+///// 9.09 (15)
+
+
+"GET /auth/me" is served again. It answers exactly what "GET /admin/auth/me" answers.
+
+Was: 404 {"message": "Not found", "success": false}
+Now: 200 {"message": "Authenticated", "success": true, "user": {...}}
+
+The path was removed on the assumption that the panel had already moved to
+"GET /admin/auth/me". It had not, and the failure did not look like one from either side: the
+panel bare-catches this call after a successful login, turns the 404 into a null identity and
+raises "your admin account could not be read", which fails the whole sign-in. The code was
+accepted, the token was minted, and nobody could get in.
+
+Requires an admin session, the same as its twin -- an account without one gets 403, not 200.
+
+Nothing to change. If you are already on "GET /admin/auth/me", stay there: this path exists
+only until the panel confirms it has migrated, and then it goes again.
+
+
+///// 9.09 (16)
+
+
+"POST /answers/report" is served. It answers exactly what "POST /social/answers/report"
+answers.
+
+Was: 405 {"message": "Method not allowed", "success": false}, Allow: DELETE, PATCH
+Now: 200 {"message": "...", "success": true}
+
+This is not a new feature, it is a route that was never there. The app has always sent
+"/answers/report" while the API has only ever served "/social/answers/report", so the request
+matched "/answers/{id}" on the moderation controller -- which maps PATCH and DELETE and no
+POST -- and was refused. Reporting an answer from the app has never worked. It looked like it
+did because the app tells the user the report was submitted before the response arrives.
+
+Requires a session, the same as its "/social" twin.
+
+Nothing to change to get it working; an installed app starts filing reports as soon as this
+ships. New work only if you want it on one path: move to "POST /social/answers/report", which
+is where every other social route already is, and tell us so this one can go.
+
+
+///// 9.09 (17)
+
+
+"GET /account/ratings" returns its ratings in a defined order.
+
+Was: "ratings" in whatever order the database returned them
+Now: newest first, ties broken by id
+
+The same defect as F-21, F-27 and 9.09 (11), on the one list those sweeps did not reach. The
+lecture inside each entry was already ordered -- "lecture.professors" has been sorted by name
+since F-21 -- so the item was ordered inside and unordered outside.
+
+Nothing to change if you sort client-side. If you render the array in the order it arrives, it
+will stop reshuffling between two requests for the same account.
+
+
+///// 10.09 (18)
+
+
+"GET /users?status=DELETED" lists soft-deleted accounts instead of refusing.
+
+Was: 400, "Deleted users are not listed"
+Now: 200, the soft-deleted accounts
+
+Every other call is unchanged, and that is deliberate: an unfiltered listing still excludes
+them, and so does a filter for any other status. The panel's account counts come off this
+listing, and counting anonymised rows would over-report the size of the platform. "DELETED" is
+the only thing that reaches them.
+
+The refusal was never about the filter. Deleted accounts were excluded from every query
+unconditionally, so asking for them could only have returned an empty page -- and an empty page
+reads as "there are none" rather than "you cannot ask that". The exclusion is conditional now,
+so the question is answerable and there is nothing left to refuse.
+
+What comes back is anonymised. A deletion scrubs "username", "kitEmail" and "biography" before
+keeping the row, so you get the "id", "joined", "credibilityScore", "warnings" and "reports"
+the account had, and "Deleted user <first 8 of the id>" where the identity was. The real
+identity is on the matching "USER_DELETED" entry in "GET /audit-logs", whose "target.label" is
+written before the scrub. That label is a display string, not two fields: render it, do not
+split it.
+
+Read-only. Every mutating route on a deleted account still answers 404.
+
+Nothing to change if you do not ask for them; no existing call moves.
+
+
+///// 10.09 (19)
+
+
+"GET /users/{id}" and "GET /users/{id}/warnings" read a soft-deleted account.
+
+Was: 404 for a soft-deleted account, on both
+Now: 200 -- the anonymised account, and its warning history
+
+The two move together on purpose. A client that reads an account and its warning history in one
+pass and treats a refusal from either as "this account is gone" would have seen no change at all
+if only one of them opened; opening one alone would have changed the contract and fixed nothing.
+
+"404" has not gone away and now says one thing instead of two. An id that names no row is still
+404 on both routes. An id that names a soft-deleted row -- which exists, anonymised -- is 200.
+Before this, 404 answered both "no such account" and "that account was deleted", and there was no
+way to tell them apart.
+
+What comes back on the account is anonymised, as in 10.09 (18): "id", "joined",
+"credibilityScore", "warnings" and "reports" survive, "Deleted user <first 8 of the id>" stands
+where the identity was, and the real identity is on the "USER_DELETED" audit entry. The warning
+history is not anonymised -- it is the record of why the account was moderated, and it outlives
+the account.
+
+Reading only. Every mutating route on a deleted account still answers 404: the profile edit, the
+block and unblock pair, the delete itself, and issuing, editing or deleting a warning. There is
+no restore.
+
+Nothing to change if you do not open a deleted account; no existing call moves.
+
+
+///// 10.09 (20)
+
+
+Two new "action" values in "GET /audit-logs" and "GET /audit-logs/meta":
+"USER_SELF_DELETED" and "USER_SELF_REACTIVATED".
+
+Was: an account that deleted itself through the app left no audit entry at all, and an account
+     that came back left none either
+Now: both write an entry, in the administrative log
+
+Until now "GET /audit-logs?action=USER_DELETED" answered for admin deletions only. An account
+that deleted itself from the app wrote nothing anywhere, so a "DELETED" row in
+"GET /users?status=DELETED" with a real username was the only sign it had ever happened, and
+there was nothing at all saying when. Both halves of the lifecycle are recorded now.
+
+"USER_SELF_DELETED" -- "PATCH /account/deleteAccount", the app's own deletion.
+
+    {
+      "action":"USER_SELF_DELETED",
+      "createdAt":"...",
+      "actor":{"type":"USER","id":"uuid","name":"ada","email":"ada@student.kit.edu","role":"STUDENT"},
+      "target":{"type":"USER","id":"uuid","label":"ada (ada@student.kit.edu)"},
+      "changes":{},
+      "metadata":{"anonymized":false},
+      "revertible":false,
+      "revertBlockedReason":"ACTION_NOT_REVERTIBLE",
+      "revertedByAuditId":null
+    }
+
+"anonymized":false is what separates it from "USER_DELETED": the admin path scrubs the account
+in the same transaction and this one does not, so the row keeps its real address.
+
+"USER_SELF_REACTIVATED" -- a deleted account set back to ACTIVE.
+
+    {
+      "action":"USER_SELF_REACTIVATED",
+      "createdAt":"...",
+      "actor":{"type":"USER","id":"uuid","name":"ada","email":"ada@student.kit.edu","role":"STUDENT"},
+      "target":{"type":"USER","id":"uuid","label":"ada (ada@student.kit.edu)"},
+      "changes":{},
+      "metadata":{"trigger":"LOGIN_CODE_REQUEST","callerAuthenticated":false},
+      "revertible":false,
+      "revertBlockedReason":"ACTION_NOT_REVERTIBLE",
+      "revertedByAuditId":null
+    }
+
+Read "callerAuthenticated":false literally. The account is revived when a login code is
+REQUESTED, not when one is entered, and "POST /auth/request-login" is public -- so the caller
+who triggered this proved nothing and need not be the account's owner. The actor is the account
+because there is no identified actor to name. That behaviour is an open defect and is not fixed
+by this entry; the entry records it.
+
+Both are "ADMINISTRATIVE" scope, so they appear in "GET /audit-logs" next to "USER_DELETED" and
+not in "GET /activity-logs", even though the actor is a student. The reader who needs them is an
+operator asking where an account went.
+
+Neither is revertible. Both carry "revertible":false and an empty "changes", and both are
+outside the revertible set, so "POST /audit-logs/{id}/revert" refuses them with
+"ACTION_NOT_REVERTIBLE". There is still no restore.
+
+Nothing to change. The action filter on "GET /audit-logs" is built from
+"GET /audit-logs/meta", so the two values appear in it without a client release, and an
+unrecognised action renders through the panel's default. If you match on action names, add
+these two; if you filter by "USER_DELETED" to find deleted accounts, note that self-deletions
+are under "USER_SELF_DELETED" and are NOT anonymised -- their "target.label" and the user row
+both carry the real identity.

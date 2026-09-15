@@ -1,0 +1,413 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.0.8</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+	<groupId>com.example</groupId>
+	<artifactId>demo</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>RateMyProfApp Backend</name>
+	<description>Lecture and professor rating service for KIT: the API behind the Android app and the admin panel.</description>
+	<!--
+		The empty url, licenses, developers and scm blocks that stood here were Spring
+		Initializr placeholders, never filled in. An empty element is worse than either
+		answer: it reads as a field somebody forgot rather than one nobody needs. Removed
+		rather than filled, because a licenses block in particular would assert a licence
+		this project has not chosen; that decision is on the board, not here.
+	-->
+	<properties>
+		<java.version>21</java.version>
+		<jacoco.version>0.8.13</jacoco.version>
+		<sonar.version>5.2.0.4988</sonar.version>
+		<!--
+			Sonar reads coverage from the JaCoCo XML rather than measuring it itself, so the
+			two numbers cannot disagree. The report is written in the test phase, which is
+			why `mvn verify sonar:sonar` works and `mvn sonar:sonar` alone reports zero.
+		-->
+		<sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+		<!--
+			The same two exclusions jacoco:check uses. Kept in step by hand: a class excluded
+			from one and not the other makes the two tools disagree about the same file.
+		-->
+		<sonar.coverage.exclusions>**/DemoApplication.java,**/exception/**</sonar.coverage.exclusions>
+		<!--
+			Ahead of what spring-boot-starter-parent 4.0.8 pins (11.0.24). Six CVEs against
+			tomcat-embed-core, three of them CRITICAL, are fixed in 11.0.25 and the Boot
+			release that pins it is not out yet. Drop this override once the parent catches
+			up: an override that outlives its reason silently holds a dependency BACK.
+		-->
+		<tomcat.version>11.0.25</tomcat.version>
+	</properties>
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+    		<groupId>org.springframework.boot</groupId>
+    		<artifactId>spring-boot-starter-mail</artifactId>
+			</dependency>
+
+
+		<dependency>
+    		<groupId>org.springframework.boot</groupId>
+   		 	<artifactId>spring-boot-starter-jdbc</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+
+		<dependency>
+    		<groupId>org.postgresql</groupId>
+    		<artifactId>postgresql</artifactId>
+   		 	<scope>runtime</scope>
+		</dependency>
+
+		<dependency>
+    		<groupId>org.springframework.boot</groupId>
+    		<artifactId>spring-boot-starter-test</artifactId>
+    		<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+
+		<!-- Hibernate's JSON JDBC mapping currently discovers the Jackson 2 FormatMapper. -->
+		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
+		</dependency>
+
+		<dependency>
+    		<groupId>org.projectlombok</groupId>
+    		<artifactId>lombok</artifactId>
+			<version>1.18.46</version>
+    		<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>org.bouncycastle</groupId>
+			<artifactId>bcprov-jdk18on</artifactId>
+			<version>1.84</version>
+		</dependency>
+
+		<!--
+			The OpenAPI schema, generated from the controllers rather than written by hand.
+			springdoc v3 is the line that supports Spring Boot 4; v2 targets Boot 3, and
+			3.0.3 is the release built against the 4.0.x this project is on.
+
+			The -api starter, not -ui: this backend is consumed by an Android client and the
+			admin panel, and swagger-ui would add webjars and a second set of routes for a
+			page nobody asked for.
+		-->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+			<version>3.0.3</version>
+		</dependency>
+
+		<!--
+			Validates real responses against the generated schema, so "the schema covers every
+			route" (OpenApiContractTests) is joined by "and the bodies match what it says".
+		-->
+		<dependency>
+			<groupId>com.atlassian.oai</groupId>
+			<artifactId>openapi-request-validator-mockmvc</artifactId>
+			<version>3.0.0</version>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+							<version>1.18.46</version>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<!--
+				Writes the resolved dependency tree to
+				target/classes/META-INF/sbom/application.cdx.json during `package`, which is
+				what the dependency:scan CI job scans.
+
+				It is here because that job cannot read a pom. Trivy resolves the parent-pom
+				chain itself, over the network whenever the local repository is cold, and the
+				first CI run of the scan died on a 429 from repo.maven.apache.org with
+				Retry-After: 1800: a shared runner IP, blocked for half an hour. The build
+				that has just downloaded the whole tree is the one place where writing it
+				down costs nothing. See the comment on dependency:scan in .gitlab-ci.yml for
+				why the Maven cache could not be relied on to make this unnecessary.
+
+				No version and no configuration. spring-boot-starter-parent manages both the
+				version (2.9.3) and an execution that puts the file where Spring Boot's
+				own SBOM support expects it. Declaring an execution here instead produced a
+				second one and a warning about attaching the artifact twice.
+
+				It does log two warnings per build, "Unknown keyword meta:enum" and
+				"Unknown keyword deprecated". They come from the plugin validating its own
+				output against the CycloneDX 1.6 schema; the goal exposes no switch for it.
+			-->
+			<plugin>
+				<groupId>org.cyclonedx</groupId>
+				<artifactId>cyclonedx-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.sonarsource.scanner.maven</groupId>
+				<artifactId>sonar-maven-plugin</artifactId>
+				<version>${sonar.version}</version>
+			</plugin>
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>${jacoco.version}</version>
+				<executions>
+					<execution>
+						<id>prepare-agent</id>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>test</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+						<configuration>
+							<excludes>
+								<exclude>**/DemoApplication.class</exclude>
+								<exclude>**/exception/**</exclude>
+							</excludes>
+						</configuration>
+					</execution>
+					<!--
+						The ratchet. Bound to verify, not to test: the number is meant to stop a
+						regression reaching the pipeline, not to fail the loop a developer runs
+						while writing the test that raises it. Raise the minimum when the suite
+						clears it, never lower it to make a build pass.
+					-->
+					<execution>
+						<id>check</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>check</goal>
+						</goals>
+						<configuration>
+							<excludes>
+								<exclude>**/DemoApplication.class</exclude>
+								<exclude>**/exception/**</exclude>
+							</excludes>
+							<rules>
+								<rule>
+									<element>BUNDLE</element>
+									<limits>
+										<limit>
+											<counter>LINE</counter>
+											<value>COVEREDRATIO</value>
+											<!--
+												Kept in step with COVERAGE_LINE_MIN in .gitlab-ci.yml.
+												This one enforces the floor locally, on `mvnw verify`;
+												the CI script enforces the same floor and adds the
+												softer COVERAGE_LINE_TARGET tier on top, which warns
+												without failing. If you move one, move the other.
+											-->
+											<minimum>0.90</minimum>
+										</limit>
+										<!--
+											A floor, not a target. Without it a heavily branched method
+											can arrive with one happy-path test and pull branch coverage
+											down without failing anything. Both limits sit in one rule so
+											a single failure message names both counters.
+										-->
+										<limit>
+											<counter>BRANCH</counter>
+											<value>COVEREDRATIO</value>
+											<!--
+												Ratcheted 0.84, then 0.87, now 0.88 as the suite cleared
+												each one. It sits about two and a half points under
+												the measurement, which is the headroom the 0.87 step
+												chose and enough that ordinary work cannot trip it.
+												What is left above it is mostly Criteria predicate
+												lambdas, which need a database rather than a batch
+												of unit tests. See docs/test-plan.md, batch 7.
+											-->
+											<minimum>0.88</minimum>
+										</limit>
+									</limits>
+								</rule>
+							</rules>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+	<!--
+		Mutation testing, in a profile so it never runs in the ordinary build.
+
+		Why it is worth having: this project has been mutation-testing by hand all along, and
+		saying so is the argument for automating it. docs/test-plan.md records a cursor predicate
+		deliberately broken to prove a sweep could go red, three files checked by hand for
+		inverted AssertJ arguments, a status code set wrong to prove four tests read it, and a
+		content filter neutered to prove two tests caught it. Each of those is one mutant, chosen
+		by a person. PIT generates them.
+
+		It answers the question coverage cannot. 95.9% line coverage says every line ran; it says
+		nothing about whether any assertion would have failed had the line been wrong. P-6 (a
+		sweep asserting "not refused", which a 404 also satisfies) is exactly a surviving
+		mutant, and it was found by reading the test rather than by running anything.
+
+		The scoping below is what makes it fast and is also what limits it: a SURVIVED mutant
+		means "these eighteen unit tests do not kill it", not "the suite does not catch it".
+		The first run proved that distinction matters. See the mutation:nightly job in
+		.gitlab-ci.yml for the worked example.
+
+		Run it with:  ./mvnw -Ppitest test-compile org.pitest:pitest-maven:mutationCoverage
+	-->
+	<profiles>
+		<profile>
+			<id>pitest</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.pitest</groupId>
+						<artifactId>pitest-maven</artifactId>
+						<version>1.30.0</version>
+						<dependencies>
+							<dependency>
+								<groupId>org.pitest</groupId>
+								<artifactId>pitest-junit5-plugin</artifactId>
+								<version>1.2.3</version>
+							</dependency>
+						</dependencies>
+						<configuration>
+							<!--
+								Services only, and paired with targetTests below rather than left to
+								default. The scoping is what makes this runnable at all: every one of
+								the eighteen service test classes is plain JUnit with no Spring
+								context (the house rule in CLAUDE.md), so PIT re-runs them per
+								mutant without starting a context. Pointed at the whole suite it would
+								start one per mutant instead, which is the difference between minutes
+								and hours.
+							-->
+							<targetClasses>
+								<param>com.pse.*.service.*</param>
+								<param>com.pse.*.mapper.*</param>
+								<param>com.pse.*.mail.*</param>
+								<param>com.pse.shared.page.*</param>
+								<param>com.pse.audit.revert.*</param>
+								<param>com.pse.security.*</param>
+							</targetClasses>
+							<targetTests>
+								<param>com.pse.*.*ServiceTests</param>
+								<param>com.pse.*.*.*ServiceTests</param>
+								<!--
+									Every test in a service or mapper package, not only the ones
+									whose name ends in ServiceTests. The narrower globs above
+									silently dropped a class the moment a collaborator was split
+									out under a name like RatingAverages: it stayed in
+									targetClasses, its tests did not match here, and every mutant
+									survived for want of anything running.
+								-->
+								<param>com.pse.*.service.*Tests</param>
+								<param>com.pse.*.mapper.*Tests</param>
+								<param>com.pse.*.mail.*Tests</param>
+								<param>com.pse.shared.page.*Tests</param>
+								<param>com.pse.audit.revert.*Tests</param>
+								<param>com.pse.security.*Tests</param>
+							</targetTests>
+							<excludedClasses>
+								<!--
+									Recorded under "Deliberately uncovered" in docs/test-plan.md and
+									having no unit tests at all. A class with no test has every
+									mutant survive, which is not information PIT is adding: it is a
+									decision already written down, restated as dozens of findings
+									that would bury the real ones.
+
+									These four are what the old MailService and MailTemplateService
+									became. LoginMapFragment came out of the same split and is
+									deliberately absent from this list: it does have tests, in
+									LoginMapFragmentTests.
+								-->
+								<param>com.pse.auth.mail.HtmlMailSender</param>
+								<param>com.pse.auth.mail.LoginCodeMail</param>
+								<param>com.pse.auth.mail.LoginNotificationMail</param>
+								<param>com.pse.auth.mail.MailTemplateService</param>
+							</excludedClasses>
+							<outputFormats>
+								<param>HTML</param>
+								<param>XML</param>
+							</outputFormats>
+							<timestampedReports>false</timestampedReports>
+							<!--
+								No mutationThreshold on purpose. The first run surfaces every surviving
+								mutant the suite has ever had, none of which is a regression, and a
+								gate that fails on the day it is introduced teaches people to pass -DskipTests
+								rather than to read it. A threshold is worth setting once the report has
+								been triaged once, the same order the coverage floors were raised in.
+							-->
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+
+</project>
